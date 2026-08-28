@@ -5,16 +5,17 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.adapters.postgres_window_store import PostgresRollingWindowStore
+from app.adapters.rolling_window import RollingWindowStore
 from app.adapters.storage import LocalStatementStorage
 from app.config import Settings, get_settings
 from app.demo_data.constants import resolve_analysis_as_of
-from app.demo_data.generate import build_fake_providers
 from app.persistence.database import get_session_factory
 from app.providers.fakes import RecordingClock
+from app.providers.live import build_providers, build_window_store
 from app.providers.protocols import ProviderRouter
 from app.services.analysis import AnalysisDependencies
 from app.services.ingestion import StatementIngestor
+from app.services.paper_execution import PaperExecutionService
 
 
 @dataclass
@@ -23,7 +24,7 @@ class AppContainer:
     session_factory: async_sessionmaker[AsyncSession]
     providers: ProviderRouter
     storage: LocalStatementStorage
-    windows: PostgresRollingWindowStore
+    windows: RollingWindowStore
     clock: RecordingClock
     ingestor: StatementIngestor
 
@@ -36,14 +37,17 @@ class AppContainer:
             clock=self.clock,
         )
 
+    def paper_execution(self) -> PaperExecutionService:
+        return PaperExecutionService(self.settings, self.session_factory, self.providers, self.clock)
+
 
 def build_container(settings: Settings | None = None) -> AppContainer:
     settings = settings or get_settings()
     factory = get_session_factory(settings)
     as_of = resolve_analysis_as_of(settings)
-    providers = build_fake_providers(as_of)
+    windows = build_window_store(settings, factory)
+    providers = build_providers(settings, as_of, windows=windows)
     storage = LocalStatementStorage(Path(settings.local_data_dir))
-    windows = PostgresRollingWindowStore(factory)
     clock = RecordingClock(as_of)
     return AppContainer(
         settings=settings,

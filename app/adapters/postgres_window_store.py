@@ -116,6 +116,7 @@ class PostgresRollingWindowStore:
         payload = dict(extra or {})
         payload["last_successful_at"] = last_successful_at.astimezone(UTC).isoformat()
         payload["window_key"] = window_key
+        payload.setdefault("schema_version", "window_v1")
         await self.put_observation(
             window_meta_key(window_key),
             "META",

@@ -12,6 +12,7 @@ from app.providers.protocols import (
     FxRate,
     PriceObservation,
     Quote,
+    SubmittedOrder,
 )
 
 
@@ -138,14 +139,22 @@ class FakeExecutionProvider:
     def __init__(self) -> None:
         self.positions: dict[tuple[str, str], ExecutionPosition] = {}
         self.tradable: dict[str, bool] = {}
+        self.asset_classes: dict[str, str] = {}
         self.calls: list[tuple[str, str]] = []
+        self.orders: dict[str, SubmittedOrder] = {}
+        self.submit_calls: list[dict] = []
+        self.reject_submit: str | None = None
 
     def seed_position(self, position: ExecutionPosition) -> None:
         self.positions[(position.account_alias, position.symbol)] = position
         self.tradable[position.symbol] = position.tradable
+        self.asset_classes[position.symbol] = position.asset_class
 
     def seed_tradable(self, symbol: str, tradable: bool) -> None:
         self.tradable[symbol] = tradable
+
+    def seed_asset_class(self, symbol: str, asset_class: str) -> None:
+        self.asset_classes[symbol] = asset_class
 
     async def is_tradable(self, symbol: str, asset_class: str) -> bool:
         self.calls.append(("tradable", symbol))
@@ -163,6 +172,65 @@ class FakeExecutionProvider:
     async def list_positions(self, account_alias: str) -> list[ExecutionPosition]:
         self.calls.append(("list", account_alias))
         return [pos for (alias, _symbol), pos in self.positions.items() if alias == account_alias]
+
+    async def submit_market_sell(
+        self,
+        *,
+        account_alias: str,
+        symbol: str,
+        quantity: Decimal,
+        client_order_id: str,
+        asset_class: str,
+    ) -> SubmittedOrder:
+        self.calls.append(("submit", symbol))
+        payload = {
+            "account_alias": account_alias,
+            "symbol": symbol,
+            "quantity": quantity,
+            "client_order_id": client_order_id,
+            "asset_class": asset_class,
+        }
+        self.submit_calls.append(payload)
+        if self.reject_submit:
+            raise LiveProviderAttemptError(self.reject_submit)
+        existing = next((o for o in self.orders.values() if o.client_order_id == client_order_id), None)
+        if existing:
+            return existing
+        order = SubmittedOrder(
+            client_order_id=client_order_id,
+            provider_order_id=f"alpaca-{client_order_id}",
+            status="SUBMITTED",
+            symbol=symbol,
+            quantity=quantity,
+            filled_qty=None,
+            fill_price=None,
+            asset_class=asset_class,
+        )
+        self.orders[order.provider_order_id] = order
+        return order
+
+    def seed_fill(self, provider_order_id: str, *, filled_qty: Decimal, fill_price: Decimal, status: str = "FILLED") -> None:
+        order = self.orders[provider_order_id]
+        order.filled_qty = filled_qty
+        order.fill_price = fill_price
+        order.status = status
+
+    async def get_order(self, account_alias: str, provider_order_id: str) -> SubmittedOrder | None:
+        self.calls.append(("get_order", provider_order_id))
+        return self.orders.get(provider_order_id)
+
+    async def provider_asset_class(self, symbol: str) -> str | None:
+        self.calls.append(("asset_class", symbol))
+        mapped = self.asset_classes.get(symbol)
+        if mapped in {"crypto", "us_equity"}:
+            return mapped
+        if mapped == "CRYPTO":
+            return "crypto"
+        if mapped in {"EQUITY", "ETF"}:
+            return "us_equity"
+        if symbol.endswith("/USD"):
+            return "crypto"
+        return mapped or "us_equity"
 
 
 class RecordingClock:

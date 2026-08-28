@@ -35,7 +35,7 @@ def get_container() -> AppContainer:
 
 @router.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "phase": "1"}
+    return {"status": "ok", "phase": "2"}
 
 
 @router.get("/health/ready")

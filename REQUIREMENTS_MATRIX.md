@@ -1,4 +1,4 @@
-# Requirements matrix (Phase 1)
+# Requirements matrix (Phase 1 + Phase 2)
 
 Status is complete only when the behavior is implemented and covered by tests, not stubs.
 
@@ -6,7 +6,7 @@ Status is complete only when the behavior is implemented and covered by tests, n
 | --- | --- | --- |
 | Python 3.12, FastAPI, Uvicorn, PostgreSQL, SQLAlchemy 2, Alembic, psycopg, scikit-learn, PyMuPDF, pydantic-settings, pytest, Docker Compose | `requirements.txt`, `Dockerfile`, `docker-compose.yml`, `pytest.ini` | Runtime install; README versions |
 | Pin compatible versions; record tested Python/Docker in README | `requirements.txt`, `README.md` | README |
-| Backend container + PostgreSQL + Compose; no Streamlit in Phase 1 | `Dockerfile`, `docker-compose.yml` | Compose file has backend+postgres only |
+| Backend container + PostgreSQL + Compose; Streamlit added as a separate Phase 2 service | `Dockerfile`, `docker-compose.yml` | Compose file has postgres+backend+ui |
 | Alembic migrations | `alembic/`, `alembic.ini` | `alembic upgrade head` in verification |
 | `.env.example`, `.gitignore`, README, ARCHITECTURE, this matrix | repo root | files exist |
 | Unit, DB-integration, parser, service-integration tests | `tests/unit`, `tests/integration`, `tests/parsers`, `tests/services` | pytest collection |
@@ -76,3 +76,30 @@ Status is complete only when the behavior is implemented and covered by tests, n
 | Financial math uses Decimal | services | drift + selection tests |
 | Concise data summary | `local-data/data_summary.json` from generator | generate returns summary |
 | Health endpoints | `GET /health`, `/health/ready` | FastAPI routes |
+
+## Phase 2
+
+| Requirement | Implementation | Tests |
+| --- | --- | --- |
+| Pinned OpenAI Agents SDK, FastMCP, Streamlit, alpaca-py, httpx | `requirements.txt` | install + imports |
+| Streamlit in a separate Compose service; FastAPI+agents+MCP in backend; Postgres separate | `docker-compose.yml` | compose file |
+| Live adapters behind Phase 1 protocols; Alpaca `paper=True` forced | `app/providers/*.py`, `ALPACA_PAPER_FORCED` | `tests/providers/test_live_adapters.py` |
+| Named paper accounts; reject submit unless `ENABLE_PAPER_ORDERS=true`; idempotent client order IDs | `AlpacaProvider`, `PaperExecutionService` | paper execution tests |
+| Seed purchases `PAPER_MIRROR_SETUP`; never tax lots | `AlpacaSyncService` | `test_alpaca_sync.py` |
+| Alpha Vantage key on every request; stale/429/timeout/malformed fallback | `AlphaVantageProvider` | live adapter tests |
+| CoinGecko demo header + explicit IDs; USD/GBP/EUR | `CoinGeckoProvider`, `mappings.py` | live adapter tests |
+| Frankfurter no key; weekend effective date | `FrankfurterProvider` | `test_frankfurter_weekend_uses_effective_earlier_date` |
+| Normalized Quote/FxRate records; deterministic routing | `protocols.ProviderRouter` | routing + analysis tests |
+| RollingWindowStore local PG + DynamoDB contract (same keys) | `postgres_window_store`, `dynamodb_window_store` | `test_window_postgres.py`, `test_window_contract.py` |
+| Incremental fetch, overlap, no meta advance on failure | `WindowSyncService` | window contract tests |
+| FastMCP Streamable HTTP at `/mcp`; listed read/analysis tools only | `app/mcp/server.py` | `test_mcp_and_agents.py` |
+| No submit/confirm/prepare/Alpaca SDK via MCP | `FORBIDDEN_MCP_TOOLS` | agents cannot submit |
+| Orchestrator / Parser / ML / Eval agents call MCP only | `app/agents/` | unit + session tests |
+| Persistent per-user Orchestrator sessions; resume/reset/close; isolation | `OrchestratorSessionService` | `test_orchestrator_sessions.py` |
+| Conversation not source of truth; no secrets/PDFs stored | session sanitization + MCP on every query | session + MCP tests |
+| FastAPI upload, analysis, approved/rejected candidates, prepare, confirm, on-demand refresh | `app/api/*` | phase2 flow + paper tests |
+| Server-bound demo session (not authentication) | `DemoSessionService` | session + paper tests |
+| `PaperExecutionService` only prepare/submit path; snapshot + token + re-gates | `app/services/paper_execution.py` | `test_paper_execution.py` |
+| Streamlit pages + confirmation checkbox/button rules | `app/ui/streamlit_app.py`, `confirm_state.py` | AppTest + confirm_state unit |
+| `python -m app.verify_integrations` | `app/verify_integrations.py` | module argparse (manual live checks) |
+| Tests mock HTTP/SDK; no live Alpaca from request | `BlockedSocket`, respx, TradingClient patch | conftest + provider tests |

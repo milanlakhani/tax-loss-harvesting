@@ -1,55 +1,65 @@
-# Architecture (Phase 1)
+# Architecture (Phase 2)
 
 ## Layers
 
 - **domain** — enums, errors, result dataclasses. No FastAPI, Streamlit, LLM, or global user state.
-- **services** — `run_analysis`, `evaluate_candidate`, ingestion, statistics, anomalies, harvesting, conflicts, portfolio math.
+- **services** — `run_analysis`, `evaluate_candidate`, ingestion, statistics, anomalies, harvesting,
+  conflicts, portfolio math, `PaperExecutionService`, `OrchestratorSessionService`, `DemoSessionService`,
+  `AlpacaSyncService`. Only `PaperExecutionService` may prepare or submit an Alpaca paper SELL.
 - **persistence** — SQLAlchemy 2 models, async engine, Alembic migrations.
-- **providers** — typed protocols (`EquityQuoteProvider`, `CryptoQuoteProvider`, `FxProvider`, `ExecutionProvider`) and deterministic fakes. Phase 2 adapters must implement the same protocols.
-- **adapters** — local statement storage (`local-data/`, gitignored) and `RollingWindowStore` (PostgreSQL local implementation + in-memory fake).
-- **parsers** — deterministic PyMuPDF parsers for `SYNTHETIC_BANK_V1` and `SYNTHETIC_BROKERAGE_V1`.
-- **api** — FastAPI health/readiness and an analysis POST that calls `run_analysis`.
+- **providers** — protocols plus fakes and live adapters (`AlphaVantageProvider`, `CoinGeckoProvider`,
+  `FrankfurterProvider`, `AlpacaProvider`). Adapters normalize quotes/FX; they do not implement gates.
+- **adapters** — statement storage and `RollingWindowStore` (PostgreSQL local, in-memory fake,
+  DynamoDB for `APP_ENV=aws` with the same logical keys).
+- **parsers** — deterministic PyMuPDF parsers.
+- **mcp** — FastMCP Streamable HTTP at `/mcp`. Thin typed wrappers around application services.
+- **agents** — Orchestrator, Document Parsing, ML Analysis, and Eval agents call MCP tools.
+  The Eval agent cannot substitute LLM opinion for a rule. The Orchestrator only reports persisted
+  candidate statuses.
+- **api** — FastAPI health, statements, analyses, paper-order prepare/confirm/refresh, demo sessions,
+  orchestrator sessions. Browser and agents submit only server-issued IDs and the confirmation token.
+- **ui** — Streamlit (separate Compose container). Confirmation requires an unchecked review box and
+  a disabled Confirm button until guards pass.
 - **jobs** — CLI wrappers with no financial logic.
 - **demo_data** — PDF generator and seed command. Not exposed via API, MCP, or UI.
 
 ## Application entry point
 
-```python
-async def run_analysis(
-    user_id: UUID,
-    *,
-    trigger: AnalysisTrigger,
-    as_of: datetime,
-    idempotency_key: str,
-) -> AnalysisRunResult
-```
+`run_analysis(user_id, trigger, as_of, idempotency_key)` remains the analysis service used by FastAPI
+and the CLI.
 
-`AnalysisTrigger` includes `SCHEDULED` in the domain, but Phase 1 never invokes a scheduler.
-
-FastAPI and `python -m app.jobs.run_analysis` call this function. The service persists the analysis run first, enforces idempotency, locks `(portfolio_id, as_of_period)` while a run is active, isolates per-portfolio work, persists candidates before `evaluate_candidate`, and does not prepare or submit orders.
+`PaperExecutionService.prepare(candidate_id, demo_session_token)` and `.confirm(candidate_id, token,
+demo_session_token)` are the only paper-order paths. Confirmation with `ENABLE_PAPER_ORDERS=false`
+never calls Alpaca.
 
 ## Rolling windows
 
-Logical keys:
+Logical keys (identical in local PostgreSQL and AWS DynamoDB):
 
 - `QUOTE#ASSET#CURRENCY`
 - `PRICE_WINDOW#ASSET#CURRENCY` (timestamp sort key)
-- `ANOMALY_WINDOW#USER#FEATURE` (timestamp + observation id)
+- `ANOMALY_WINDOW#USER#FEATURE` (timestamp + stable observation id)
 - `FX#BASE#QUOTE#DATE`
-- `WINDOW_META#WINDOW_KEY`
+- `WINDOW_META#WINDOW_KEY` (last-successful timestamp, bounds, `schema_version=window_v1`)
 
-Queries always apply a cutoff timestamp (DynamoDB TTL is asynchronous in later phases). Metadata advances only after a complete fetch+write.
+`WindowSyncService` fetches only history after the saved timestamp minus configured overlap.
+Metadata does not advance on a failed or partial refresh. Analysis consumes stored windows.
 
-## Harvesting
+## Provider routing
 
-Hard gates run before ranking. FX/CURRENCY/CASH/BANK_BALANCE/UNKNOWN are never candidates. Missing basis is rejected, never inferred. Replacement relationships come from a versioned table. Rapid price decline is a warning only.
+- EQUITY / ETF → Alpha Vantage
+- CRYPTO → CoinGecko (explicit IDs only)
+- FX → Frankfurter
+- Paper holdings / orders / fills → Alpaca (`paper=True` is a forced constant, never request-derived)
 
-Conflict identities use a canonical fingerprint (no analysis-run id, clock, or explanation text) with a unique constraint. Repeats are labelled `STILL_ACTIVE`. Expiry resolves the row; history is kept.
+## Orchestrator sessions vs demo sessions
 
-## Demo data
+Demo-session binding protects paper-order confirmation. Orchestrator sessions persist SDK conversation
+items per `(user_id, demo_session_id)` with at most one ACTIVE row. Remembered tool output is never
+treated as financial source of truth.
 
-Historical 2024 PDFs are regression fixtures. Current-demo PDFs are a separate set generated from `DEMO_AS_OF_DATE`. Parsers print dates as stored; they do not rewrite calendar years. Current Alpaca paper positions are the quantity authority for live/demo harvesting; statement lots are reconciled and never silently merged with unrelated broker holdings.
+## Harvesting and paper execution
 
-Isolation Forest is fit per user with a fixed seed. Features are causal (no future leakage) and versioned (`iforest_features_v1`). Labels live in `anomaly_ground_truth` and are never used for fitting. Insufficient history returns `INSUFFICIENT_HISTORY` and a rule-based fallback.
-
-Normalized score = min-max of `-decision_function` so higher means more anomalous. Flagging uses sklearn's contamination offset (`predict == -1`).
+Hard gates run before ranking and again at prepare/confirm. FX/CURRENCY/CASH/BANK_BALANCE/UNKNOWN are
+never sold. Missing CoinGecko mappings, mismatched Alpaca asset classes, stale quotes, insufficient
+quantities, reused tokens, and modified snapshots fail closed. Replacement BUYs are suggestions only.

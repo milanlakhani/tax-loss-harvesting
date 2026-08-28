@@ -46,14 +46,38 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     alpha_vantage_api_key: str | None = None
     coingecko_api_key: str | None = None
+    coingecko_api_plan: str = "demo"
+    coingecko_api_base_url: str = "https://api.coingecko.com/api/v3"
     alpaca_paper: bool = True
     enable_paper_orders: bool = False
-
+    use_live_providers: bool = False
+    alpaca_account_1_name: str = "conservative-demo"
+    alpaca_account_1_key: str | None = None
+    alpaca_account_1_secret: str | None = None
+    alpaca_account_2_name: str = "growth-demo"
+    alpaca_account_2_key: str | None = None
+    alpaca_account_2_secret: str | None = None
+    dynamodb_table: str = "finance-rolling-windows"
+    aws_region: str = "eu-west-2"
+    paper_prep_ttl_seconds: int = 300
+    backend_public_url: str = "http://localhost:8000"
     demo_session_signing_secret: str = "change-me"
 
     @property
     def is_local(self) -> bool:
         return self.app_env.lower() in {"local", "test", "testing"}
+
+    @property
+    def is_aws(self) -> bool:
+        return self.app_env.lower() == "aws"
+
+    def alpaca_credentials(self) -> dict[str, tuple[str, str]]:
+        accounts: dict[str, tuple[str, str]] = {}
+        if self.alpaca_account_1_name and self.alpaca_account_1_key:
+            accounts[self.alpaca_account_1_name] = (self.alpaca_account_1_key, self.alpaca_account_1_secret or "")
+        if self.alpaca_account_2_name and self.alpaca_account_2_key:
+            accounts[self.alpaca_account_2_name] = (self.alpaca_account_2_key, self.alpaca_account_2_secret or "")
+        return accounts
 
 
 _settings: Settings | None = None

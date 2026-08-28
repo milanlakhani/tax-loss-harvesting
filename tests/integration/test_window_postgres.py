@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 
 from app.adapters.memory_window_store import InMemoryRollingWindowStore
+from app.adapters.dynamodb_window_store import DynamoDBRollingWindowStore, InMemoryDynamoTable
 from app.adapters.postgres_window_store import PostgresRollingWindowStore
 from app.adapters.rolling_window import timestamp_sort_key
 from app.providers.fakes import RecordingClock
@@ -55,6 +56,11 @@ async def _contract(store):
 @pytest.mark.unit
 async def test_memory_window_matches_contract():
     await _contract(InMemoryRollingWindowStore(RecordingClock()))
+
+
+@pytest.mark.unit
+async def test_dynamo_emulator_window_matches_contract():
+    await _contract(DynamoDBRollingWindowStore(InMemoryDynamoTable()))
 
 
 @pytest.mark.integration

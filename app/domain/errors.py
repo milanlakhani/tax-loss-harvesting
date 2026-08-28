@@ -35,3 +35,13 @@ class ProviderError(DomainError):
 class InvalidStateTransitionError(DomainError):
     def __init__(self, message: str) -> None:
         super().__init__(message, code="INVALID_STATE_TRANSITION")
+
+
+class PaperExecutionError(DomainError):
+    def __init__(self, message: str, code: str = "PAPER_EXECUTION_ERROR") -> None:
+        super().__init__(message, code=code)
+
+
+class SessionAccessError(DomainError):
+    def __init__(self, message: str = "Session not found") -> None:
+        super().__init__(message, code="SESSION_NOT_FOUND")

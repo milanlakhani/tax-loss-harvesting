@@ -34,5 +34,22 @@ services:
     command: >
       sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
+  ui:
+    build: .
+    depends_on:
+      - backend
+    environment:
+      BACKEND_URL: http://backend:8000
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "8501:8501"
+    command: >
+      streamlit run app/ui/streamlit_app.py
+      --server.address 0.0.0.0
+      --server.port 8501
+      --server.headless true
+
 volumes:
   pgdata:

@@ -51,7 +51,13 @@ ALLOWED_TRANSITIONS = {
         CandidateStatus.REJECTED,
         CandidateStatus.BELOW_THRESHOLD,
         CandidateStatus.NOT_EXECUTABLE,
-    }
+    },
+    CandidateStatus.APPROVED: {
+        CandidateStatus.APPROVED,
+        CandidateStatus.REJECTED,
+        CandidateStatus.BELOW_THRESHOLD,
+        CandidateStatus.NOT_EXECUTABLE,
+    },
 }
 
 
@@ -261,6 +267,27 @@ class HarvestingService:
             evaluation.conflict_label = label.value
         await session.flush()
         return evaluation
+
+    async def recheck_approved(
+        self,
+        session: AsyncSession,
+        candidate_id: UUID,
+        as_of: datetime,
+        now: datetime,
+        asset_values: dict[str, Decimal],
+        class_of: dict[str, str],
+    ) -> tuple[bool, RejectionCode | None, str, Quote | None]:
+        """Re-run hard gates on an already-evaluated candidate without substituting new policy."""
+        evaluation = await self.evaluate_candidate(session, candidate_id, as_of, now, asset_values, class_of)
+        ok = evaluation.status == CandidateStatus.APPROVED.value
+        code = RejectionCode(evaluation.rejection_code) if evaluation.rejection_code else None
+        quote = None
+        candidate = await session.get(HarvestingCandidate, candidate_id)
+        if candidate:
+            asset = await session.get(Asset, candidate.asset_id)
+            if asset:
+                quote = await self.providers.quote_for_asset_type(asset.asset_type, asset.canonical_id, asset.symbol, as_of)
+        return ok, code, evaluation.explanation, quote
 
     async def _apply_gates(
         self,

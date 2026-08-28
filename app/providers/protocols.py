@@ -25,6 +25,9 @@ class Quote:
         retrieved_at: datetime,
         is_mocked: bool,
         tradable: bool = True,
+        stale: bool = False,
+        asset_type: str | None = None,
+        symbol: str | None = None,
     ) -> None:
         self.canonical_id = canonical_id
         self.price = price
@@ -35,6 +38,9 @@ class Quote:
         self.retrieved_at = ensure_utc(retrieved_at)
         self.is_mocked = is_mocked
         self.tradable = tradable
+        self.stale = stale
+        self.asset_type = asset_type
+        self.symbol = symbol
 
 
 class FxRate:
@@ -135,6 +141,31 @@ class FxProvider(Protocol):
     async def get_rate(self, base: str, quote_ccy: str, on: date) -> FxRate | None: ...
 
 
+class SubmittedOrder:
+    def __init__(
+        self,
+        *,
+        client_order_id: str,
+        provider_order_id: str,
+        status: str,
+        symbol: str,
+        quantity: Decimal,
+        filled_qty: Decimal | None = None,
+        fill_price: Decimal | None = None,
+        asset_class: str | None = None,
+        submitted_at: datetime | None = None,
+    ) -> None:
+        self.client_order_id = client_order_id
+        self.provider_order_id = provider_order_id
+        self.status = status
+        self.symbol = symbol
+        self.quantity = quantity
+        self.filled_qty = filled_qty
+        self.fill_price = fill_price
+        self.asset_class = asset_class
+        self.submitted_at = submitted_at
+
+
 @runtime_checkable
 class ExecutionProvider(Protocol):
     provider_name: str
@@ -146,6 +177,20 @@ class ExecutionProvider(Protocol):
     async def get_position(self, account_alias: str, symbol: str) -> ExecutionPosition | None: ...
 
     async def list_positions(self, account_alias: str) -> list[ExecutionPosition]: ...
+
+    async def submit_market_sell(
+        self,
+        *,
+        account_alias: str,
+        symbol: str,
+        quantity: Decimal,
+        client_order_id: str,
+        asset_class: str,
+    ) -> SubmittedOrder: ...
+
+    async def get_order(self, account_alias: str, provider_order_id: str) -> SubmittedOrder | None: ...
+
+    async def provider_asset_class(self, symbol: str) -> str | None: ...
 
 
 class ProviderRouter:

@@ -26,6 +26,7 @@ class CandidateStatus(str, Enum):
 
 class PreparationStatus(str, Enum):
     PREPARED = "PREPARED"
+    RESERVED = "RESERVED"
     CONFIRMED = "CONFIRMED"
     FAILED = "FAILED"
     EXPIRED = "EXPIRED"
