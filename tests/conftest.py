@@ -70,6 +70,8 @@ def settings(tmp_path) -> Settings:
         isolation_forest_contamination=0.06,
         min_history_threshold=80,
         quote_max_age_minutes=15,
+        demo_mode="historical",
+        demo_as_of_date="2026-08-28",
     )
     override_settings(cfg)
     return cfg

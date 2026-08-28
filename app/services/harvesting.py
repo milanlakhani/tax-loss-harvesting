@@ -15,6 +15,7 @@ from app.domain.enums import (
     INELIGIBLE_HARVEST_ASSET_TYPES,
     RejectionCode,
     ReplacementKind,
+    StatementFormat,
 )
 from app.domain.errors import InvalidStateTransitionError as StateError
 from app.persistence.models import (
@@ -29,11 +30,19 @@ from app.persistence.models import (
     PortfolioAccount,
     ReplacementRelationship,
     RiskProfile,
+    Statement,
     TargetAllocation,
     TaxLot,
 )
 from app.providers.protocols import ProviderRouter, Quote
 from app.services.conflicts import ConflictService, canonical_conflict_payload, persistable
+from app.services.freshness import (
+    brokerage_data_is_stale,
+    position_mismatch_symbols,
+    statement_quantities_by_symbol,
+    verify_proposed_sell_quantity,
+    wash_sale_coverage_complete,
+)
 from app.services.portfolio import class_weights, simulated_weights_after_sale
 
 ALLOWED_TRANSITIONS = {
@@ -63,6 +72,10 @@ class GateContext:
     window_end: str | None
     risk_effect: Decimal
     drift_effect: Decimal
+    alpaca_positions: list
+    brokerage_period_start: object | None
+    brokerage_period_end: object | None
+    statement_qty_by_symbol: dict
 
 
 @dataclass(slots=True)
@@ -153,15 +166,32 @@ class HarvestingService:
         quote = await self.providers.quote_for_asset_type(asset.asset_type, asset.canonical_id, asset.symbol, as_of)
         tradable = False
         mirror_qty = Decimal("0")
+        alpaca_positions = []
         if account.alpaca_alias:
             tradable = await self.providers.execution.is_tradable(asset.symbol, asset.asset_type)
-            mirror_qty = await self.providers.execution.available_quantity(account.alpaca_alias, asset.symbol)
+            position = await self.providers.execution.get_position(account.alpaca_alias, asset.symbol)
+            mirror_qty = position.quantity if position else Decimal("0")
+            alpaca_positions = await self.providers.execution.list_positions(account.alpaca_alias)
         replacement = await self._preferred_replacement(session, asset.canonical_id)
         total_loss = None
         trade_notional = Decimal("0")
         if quote is not None and lot.remaining_quantity > 0 and lot.per_unit_basis is not None:
             trade_notional = quote.price * lot.remaining_quantity
             total_loss = (lot.per_unit_basis - quote.price) * lot.remaining_quantity
+        brokerage_stmt = await session.scalar(
+            select(Statement)
+            .where(
+                Statement.portfolio_id == account.id,
+                Statement.format == StatementFormat.SYNTHETIC_BROKERAGE_V1.value,
+            )
+            .order_by(Statement.period_end.desc())
+        )
+        portfolio_lots = list(await session.scalars(select(TaxLot).where(TaxLot.portfolio_id == account.id)))
+        lot_symbols: list[tuple[str, Decimal]] = []
+        for open_lot in portfolio_lots:
+            lot_asset = await session.get(Asset, open_lot.asset_id)
+            if lot_asset is not None:
+                lot_symbols.append((lot_asset.symbol, open_lot.remaining_quantity))
         ctx = GateContext(
             candidate=candidate,
             lot=lot,
@@ -178,6 +208,10 @@ class HarvestingService:
             window_end=None,
             risk_effect=Decimal("0"),
             drift_effect=Decimal("0"),
+            alpaca_positions=alpaca_positions,
+            brokerage_period_start=brokerage_stmt.period_start if brokerage_stmt else None,
+            brokerage_period_end=brokerage_stmt.period_end if brokerage_stmt else None,
+            statement_qty_by_symbol=statement_quantities_by_symbol(lot_symbols),
         )
         code, explanation, status = await self._apply_gates(session, ctx, as_of, asset_values, class_of)
         transition(candidate.status, status)
@@ -262,6 +296,9 @@ class HarvestingService:
                 f"Usable loss {ctx.total_loss} below minimum {self.settings.min_loss_threshold}",
                 CandidateStatus.BELOW_THRESHOLD,
             )
+        freshness = await self._freshness_or_reconciliation(ctx, as_of)
+        if freshness:
+            return freshness
         wash = await self._wash_or_crypto_conflict(session, ctx, as_of)
         if wash:
             return wash
@@ -292,6 +329,12 @@ class HarvestingService:
                 "Mirrored execution quantity is insufficient",
                 CandidateStatus.NOT_EXECUTABLE,
             )
+        ownership = verify_proposed_sell_quantity(
+            next((p for p in ctx.alpaca_positions if p.symbol == asset.symbol), None),
+            lot.remaining_quantity if ctx.mirror_qty >= lot.remaining_quantity else ctx.mirror_qty,
+        )
+        if ownership:
+            return ownership, "Mapped Alpaca account does not own the proposed sell quantity", CandidateStatus.NOT_EXECUTABLE
         executed = await session.scalar(
             select(PaperOrder).join(PaperOrder.preparation).where(
                 PaperOrder.status.in_(["SUBMITTED", "PARTIALLY_FILLED", "FILLED"])
@@ -306,6 +349,52 @@ class HarvestingService:
         _ = executed
         _ = repl_id
         return None, "Passed all hard gates", CandidateStatus.APPROVED
+
+    async def _freshness_or_reconciliation(
+        self,
+        ctx: GateContext,
+        as_of: datetime,
+    ) -> tuple[RejectionCode, str, CandidateStatus] | None:
+        if ctx.brokerage_period_end is None or ctx.brokerage_period_start is None:
+            return (
+                RejectionCode.INCOMPLETE_HISTORY,
+                "No brokerage statement covers wash-sale evaluation",
+                CandidateStatus.NOT_EXECUTABLE,
+            )
+        if brokerage_data_is_stale(ctx.brokerage_period_end, as_of):
+            return (
+                RejectionCode.DATA_STALE,
+                "Brokerage statement is older than the analysis as-of date and is not the current Alpaca portfolio",
+                CandidateStatus.NOT_EXECUTABLE,
+            )
+        if not wash_sale_coverage_complete(
+            ctx.brokerage_period_start,
+            ctx.brokerage_period_end,
+            as_of,
+            self.settings.wash_sale_window_days,
+        ):
+            return (
+                RejectionCode.INCOMPLETE_HISTORY,
+                "Brokerage purchases do not cover the wash-sale window",
+                CandidateStatus.NOT_EXECUTABLE,
+            )
+        mismatched = position_mismatch_symbols(ctx.statement_qty_by_symbol, ctx.alpaca_positions)
+        if mismatched:
+            return (
+                RejectionCode.POSITION_MISMATCH,
+                "Alpaca paper holdings do not reconcile with statement-derived tax lots",
+                CandidateStatus.NOT_EXECUTABLE,
+            )
+        return None
+
+    async def verify_order_quantity(
+        self,
+        account_alias: str,
+        symbol: str,
+        proposed_qty: Decimal,
+    ) -> RejectionCode | None:
+        position = await self.providers.execution.get_position(account_alias, symbol)
+        return verify_proposed_sell_quantity(position, proposed_qty)
 
     async def _wash_or_crypto_conflict(
         self,

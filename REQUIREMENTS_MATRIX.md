@@ -67,6 +67,11 @@ Status is complete only when the behavior is implemented and covered by tests, n
 | Distinct conservative vs growth risk profiles | `seed_risk_and_targets` | analysis risk rejections |
 | Mirror manifest fields; planned sale ≤ manifest qty; PG is tax-lot source | `_mirror_payload` | generate payload |
 | Tests never call live APIs; patch at provider boundary | `tests/conftest.py` `BlockedSocket`; fakes only | conftest + routing test |
+| Current-demo statements relative to `DEMO_AS_OF_DATE` (default 2026-08-28); 2024 PDFs preserved | `build_bank_statements(as_of=)`, `portfolio_*_spec(as_of=)` | `tests/parsers/test_current_demo.py` |
+| Interactive local demo may set `DEMO_AS_OF_DATE=today`; tests pin a fixed date | `parse_demo_as_of_date`, `resolve_analysis_as_of` | `tests/unit/test_freshness.py` |
+| Current-demo bank history meets `min_history_threshold`; wash/reinvest/scheduled offsets explicit; dividend dates consistent | bank/brokerage generators | current-demo parser tests |
+| Current brokerage qty from mapped Alpaca account; reconcile lots; never treat 2024 as current book | `HarvestingService._freshness_or_reconciliation` | `tests/services/test_reconciliation.py` |
+| Missing coverage or mismatch fails closed (`DATA_STALE`, `INCOMPLETE_HISTORY`, `POSITION_MISMATCH`); verify qty before order | `app/services/freshness.py` | reconciliation + freshness tests |
 | Separate users never share data | ingest user_id filters | seed isolation assert |
 | Financial math uses Decimal | services | drift + selection tests |
 | Concise data summary | `local-data/data_summary.json` from generator | generate returns summary |

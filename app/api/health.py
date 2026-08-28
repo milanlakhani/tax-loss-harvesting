@@ -9,7 +9,7 @@ from sqlalchemy import text
 from app.container import AppContainer, build_container
 from app.domain.enums import AnalysisTrigger
 from app.domain.errors import ActiveAnalysisExistsError, IdempotencyConflictError
-from app.demo_data.constants import AS_OF
+from app.demo_data.constants import resolve_analysis_as_of
 from app.services.analysis import run_analysis
 
 router = APIRouter()
@@ -57,7 +57,7 @@ async def create_analysis(
         result = await run_analysis(
             user_id,
             trigger=body.trigger if body.trigger is not AnalysisTrigger.SCHEDULED else AnalysisTrigger.API,
-            as_of=AS_OF,
+            as_of=resolve_analysis_as_of(container.settings),
             idempotency_key=key,
             deps=container.analysis_deps(),
         )

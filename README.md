@@ -67,6 +67,21 @@ long-term subtotals. That is a simplified educational ranking target, not a comp
 
 The 30-day crypto repurchase window is a conservative project policy, not tax law.
 
+## Demo clocks
+
+Historical regression fixtures stay anchored to **2024-06-15**. Do not rewrite those PDF dates during parsing.
+
+Current-demo statements are generated separately with `DEMO_AS_OF_DATE` (default `2026-08-28`):
+
+```bash
+python -m app.jobs.seed --mode current --as-of 2026-08-28
+python -m app.jobs.seed --mode current --as-of today --pdfs-only
+```
+
+Tests must set a fixed `DEMO_AS_OF_DATE`. Interactive local demo may use `today`. `python -m app.jobs.run_analysis` uses `DEMO_MODE` (`historical` or `current`) to choose the analysis as-of timestamp.
+
+Authoritative current brokerage quantities come from the mapped Alpaca paper account. Statement tax lots are reconciled against those positions. A 2024 statement is never treated as the current Alpaca book. Missing wash-sale coverage or a position mismatch fails closed (`DATA_STALE`, `INCOMPLETE_HISTORY`, `POSITION_MISMATCH`).
+
 ## Layout
 
 See `ARCHITECTURE.md` and `REQUIREMENTS_MATRIX.md`.

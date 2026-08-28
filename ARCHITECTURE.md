@@ -46,7 +46,9 @@ Hard gates run before ranking. FX/CURRENCY/CASH/BANK_BALANCE/UNKNOWN are never c
 
 Conflict identities use a canonical fingerprint (no analysis-run id, clock, or explanation text) with a unique constraint. Repeats are labelled `STILL_ACTIVE`. Expiry resolves the row; history is kept.
 
-## Anomaly scoring
+## Demo data
+
+Historical 2024 PDFs are regression fixtures. Current-demo PDFs are a separate set generated from `DEMO_AS_OF_DATE`. Parsers print dates as stored; they do not rewrite calendar years. Current Alpaca paper positions are the quantity authority for live/demo harvesting; statement lots are reconciled and never silently merged with unrelated broker holdings.
 
 Isolation Forest is fit per user with a fixed seed. Features are causal (no future leakage) and versioned (`iforest_features_v1`). Labels live in `anomaly_ground_truth` and are never used for fitting. Insufficient history returns `INSUFFICIENT_HISTORY` and a rule-based fallback.
 

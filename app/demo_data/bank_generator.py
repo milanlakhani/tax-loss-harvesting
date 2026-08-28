@@ -13,6 +13,7 @@ from app.demo_data.constants import (
     CATEGORIES,
     EUR_USD,
     GBP_USD,
+    HISTORICAL_AS_OF_DATE,
     RECURRING_MERCHANTS,
     SEED,
     USER_A_ID,
@@ -33,20 +34,66 @@ ANOMALY_TYPES = [
 ]
 
 
-def month_periods_for_user(user_index: int) -> list[tuple[date, date]]:
-    if user_index == 0:
-        months = [(2024, 2), (2024, 3), (2024, 4)]
-    else:
-        months = [(2024, 3), (2024, 4), (2024, 5)]
-    periods = []
-    for year, month in months:
+def _add_months(year: int, month: int, delta: int) -> tuple[int, int]:
+    index = year * 12 + (month - 1) + delta
+    return index // 12, index % 12 + 1
+
+
+def month_periods_for_user(user_index: int, as_of: date | None = None) -> list[tuple[date, date]]:
+    if as_of is None or as_of == HISTORICAL_AS_OF_DATE:
+        if user_index == 0:
+            months = [(2024, 2), (2024, 3), (2024, 4)]
+        else:
+            months = [(2024, 3), (2024, 4), (2024, 5)]
+        periods = []
+        for year, month in months:
+            last = monthrange(year, month)[1]
+            periods.append((date(year, month, 1), date(year, month, last)))
+        return periods
+    return month_periods_for_as_of(as_of, month_count=3)
+
+
+def month_periods_for_as_of(as_of: date, *, month_count: int) -> list[tuple[date, date]]:
+    periods: list[tuple[date, date]] = []
+    for back in range(month_count - 1, -1, -1):
+        year, month = _add_months(as_of.year, as_of.month, -back)
+        start = date(year, month, 1)
         last = monthrange(year, month)[1]
-        periods.append((date(year, month, 1), date(year, month, last)))
+        end = as_of if (year, month) == (as_of.year, as_of.month) else date(year, month, last)
+        if start <= end:
+            periods.append((start, end))
     return periods
 
 
-def build_bank_statements() -> tuple[list[BankStatementSpec], list[tuple[str, str, str]]]:
-    """Return statement specs and ground-truth (txn_id, anomaly_type, reason)."""
+def build_bank_statements(
+    *,
+    as_of: date | None = None,
+    min_history: int = 80,
+) -> tuple[list[BankStatementSpec], list[tuple[str, str, str]]]:
+    """Return statement specs and ground-truth (txn_id, anomaly_type, reason).
+
+    Historical 2024 fixtures are unchanged when ``as_of`` is omitted. Current-demo
+    statements are generated relative to ``as_of`` with enough preceding months
+    to satisfy ``min_history``.
+    """
+    if as_of is None:
+        return _build_bank_statements_for_periods(
+            lambda user_index: month_periods_for_user(user_index)
+        )
+    month_count = 3
+    while True:
+        statements, labels = _build_bank_statements_for_periods(
+            lambda user_index, count=month_count: month_periods_for_as_of(as_of, month_count=count)
+        )
+        counts: dict[UUID, int] = {}
+        for spec in statements:
+            counts[spec.user_id] = counts.get(spec.user_id, 0) + len(spec.transactions)
+        if all(count >= min_history for count in counts.values()) or month_count >= 12:
+            return statements, labels
+        month_count += 1
+
+
+def _build_bank_statements_for_periods(periods_for_user) -> tuple[list[BankStatementSpec], list[tuple[str, str, str]]]:
     rng = Random(SEED)
     statements: list[BankStatementSpec] = []
     labels: list[tuple[str, str, str]] = []
@@ -56,7 +103,7 @@ def build_bank_statements() -> tuple[list[BankStatementSpec], list[tuple[str, st
     ]
     for user_id, account_id, user_index, opening0 in users:
         opening = opening0
-        for month_index, (start, end) in enumerate(month_periods_for_user(user_index)):
+        for month_index, (start, end) in enumerate(periods_for_user(user_index)):
             spec, month_labels, closing = _one_statement(
                 rng, user_id, account_id, user_index, month_index, start, end, opening
             )
@@ -178,7 +225,8 @@ def _one_statement(
         cursor += timedelta(days=1)
 
     # Inject three extreme anomalies after the normal pattern exists.
-    anomaly_plan = ANOMALY_TYPES[month_index * 3 : month_index * 3 + 3]
+    start_idx = (month_index * 3) % len(ANOMALY_TYPES)
+    anomaly_plan = [ANOMALY_TYPES[(start_idx + i) % len(ANOMALY_TYPES)] for i in range(3)]
     for kind in anomaly_plan:
         row, reason = _inject_anomaly(add, start, end, month_index, kind)
         labels.append((row.transaction_id, kind, reason))

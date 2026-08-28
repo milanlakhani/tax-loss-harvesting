@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.adapters.postgres_window_store import PostgresRollingWindowStore
 from app.adapters.storage import LocalStatementStorage
 from app.config import Settings, get_settings
+from app.demo_data.constants import resolve_analysis_as_of
 from app.demo_data.generate import build_fake_providers
 from app.persistence.database import get_session_factory
 from app.providers.fakes import RecordingClock
@@ -39,10 +40,11 @@ class AppContainer:
 def build_container(settings: Settings | None = None) -> AppContainer:
     settings = settings or get_settings()
     factory = get_session_factory(settings)
-    providers = build_fake_providers()
+    as_of = resolve_analysis_as_of(settings)
+    providers = build_fake_providers(as_of)
     storage = LocalStatementStorage(Path(settings.local_data_dir))
     windows = PostgresRollingWindowStore(factory)
-    clock = RecordingClock()
+    clock = RecordingClock(as_of)
     return AppContainer(
         settings=settings,
         session_factory=factory,

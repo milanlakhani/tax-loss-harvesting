@@ -5,7 +5,7 @@ import asyncio
 from uuid import UUID
 
 from app.container import build_container
-from app.demo_data.constants import AS_OF
+from app.demo_data.constants import resolve_analysis_as_of
 from app.domain.enums import AnalysisTrigger
 from app.persistence.models import User
 from app.services.analysis import run_analysis
@@ -26,7 +26,7 @@ async def _run(user_id: UUID | None, all_users: bool) -> None:
         result = await run_analysis(
             uid,
             trigger=AnalysisTrigger.MANUAL,
-            as_of=AS_OF,
+            as_of=resolve_analysis_as_of(container.settings),
             idempotency_key=f"cli-{uid}",
             deps=deps,
         )

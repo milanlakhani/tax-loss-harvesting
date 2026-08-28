@@ -145,6 +145,8 @@ class ExecutionProvider(Protocol):
 
     async def get_position(self, account_alias: str, symbol: str) -> ExecutionPosition | None: ...
 
+    async def list_positions(self, account_alias: str) -> list[ExecutionPosition]: ...
+
 
 class ProviderRouter:
     """Routes asset-class requests to the configured fake or live adapters."""

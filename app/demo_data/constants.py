@@ -1,13 +1,50 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
 SEED = 42
 AS_OF = datetime(2024, 6, 15, 15, 0, tzinfo=UTC)
+HISTORICAL_AS_OF_DATE = AS_OF.date()
+DEFAULT_DEMO_AS_OF_DATE = date(2026, 8, 28)
 QUOTE_TS = datetime(2024, 6, 15, 14, 55, tzinfo=UTC)
 STALE_QUOTE_TS = datetime(2024, 6, 1, 14, 0, tzinfo=UTC)
+
+# Explicit offsets from DEMO_AS_OF_DATE for current-demo wash-sale coverage.
+WASH_EQUITY_REINVEST_OFFSET_DAYS = -10
+CRYPTO_SCHEDULED_BUY_OFFSET_DAYS = -7
+
+
+def as_of_datetime(day: date, *, hour: int = 15, minute: int = 0) -> datetime:
+    return datetime(day.year, day.month, day.day, hour, minute, tzinfo=UTC)
+
+
+def quote_timestamps_for(as_of: datetime) -> tuple[datetime, datetime]:
+    """Fresh quote (~5 minutes before as_of) and stale quote (~14 days before)."""
+    return as_of - timedelta(minutes=5), as_of - timedelta(days=14)
+
+
+def parse_demo_as_of_date(value: str, *, allow_today: bool, today: date | None = None) -> date:
+    raw = value.strip()
+    if raw.lower() == "today":
+        if not allow_today:
+            raise ValueError("DEMO_AS_OF_DATE=today is only allowed in interactive local demo mode")
+        return today or datetime.now(UTC).date()
+    return date.fromisoformat(raw)
+
+
+def resolve_analysis_as_of(settings, *, today: date | None = None) -> datetime:
+    mode = (settings.demo_mode or "historical").strip().lower()
+    if mode in {"historical", "hist", "regression"}:
+        return AS_OF
+    allow_today = bool(settings.is_local)
+    day = parse_demo_as_of_date(settings.demo_as_of_date, allow_today=allow_today, today=today)
+    return as_of_datetime(day)
+
+
+def shift_from_historical(day: date, target_as_of: date) -> date:
+    return day + (target_as_of - HISTORICAL_AS_OF_DATE)
 
 USER_A_ID = UUID("11111111-1111-4111-8111-111111111111")
 USER_B_ID = UUID("22222222-2222-4222-8222-222222222222")

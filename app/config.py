@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     harvest_allow_exceed_target: bool = False
     crypto_repurchase_window_days: int = 30
     wash_sale_window_days: int = 30
+    demo_mode: str = "historical"
+    demo_as_of_date: str = "2026-08-28"
     long_term_holding_days: int = 365
     local_data_dir: Path = Path("local-data")
     feature_set_version: str = "iforest_features_v1"

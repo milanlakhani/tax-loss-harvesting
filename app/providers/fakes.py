@@ -160,6 +160,10 @@ class FakeExecutionProvider:
         self.calls.append(("position", symbol))
         return self.positions.get((account_alias, symbol))
 
+    async def list_positions(self, account_alias: str) -> list[ExecutionPosition]:
+        self.calls.append(("list", account_alias))
+        return [pos for (alias, _symbol), pos in self.positions.items() if alias == account_alias]
+
 
 class RecordingClock:
     def __init__(self, now: datetime | None = None) -> None:

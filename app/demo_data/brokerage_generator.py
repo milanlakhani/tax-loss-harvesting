@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date
+from dataclasses import replace
+from datetime import date, timedelta
 from decimal import Decimal
 from uuid import UUID
 
@@ -15,12 +16,15 @@ from app.demo_data.brokerage_pdf import (
 )
 from app.demo_data.constants import (
     ASSET_CATALOG,
+    CRYPTO_SCHEDULED_BUY_OFFSET_DAYS,
     PORTFOLIO_A_HOLDINGS,
     PORTFOLIO_B_HOLDINGS,
     PORTFOLIO_A_ID,
     PORTFOLIO_B_ID,
     USER_A_ID,
     USER_B_ID,
+    WASH_EQUITY_REINVEST_OFFSET_DAYS,
+    shift_from_historical,
 )
 from app.domain.enums import AssetType, HoldingPeriod
 
@@ -121,48 +125,161 @@ def _realized(sales: list[SaleSpec]) -> RealizedSummary:
     )
 
 
-def portfolio_a_spec() -> BrokerageStatementSpec:
+def portfolio_a_spec(*, as_of: date | None = None) -> BrokerageStatementSpec:
     lots = _portfolio_a_lots()
     sales = _portfolio_a_sales()
     dividends, purchases = _portfolio_a_income()
-    return BrokerageStatementSpec(
-        statement_id="BRK-A-2024-06",
+    if as_of is None:
+        return _assemble_spec(
+            statement_id="BRK-A-2024-06",
+            account_id=PORTFOLIO_A_ID,
+            user_id=USER_A_ID,
+            period_start=date(2024, 1, 1),
+            period_end=date(2024, 6, 15),
+            holdings_symbols=PORTFOLIO_A_HOLDINGS,
+            lots=lots,
+            sales=sales,
+            dividends=dividends,
+            purchases=purchases,
+        )
+    return _current_demo_spec(
+        prefix="A",
         account_id=PORTFOLIO_A_ID,
-        portfolio_id=PORTFOLIO_A_ID,
         user_id=USER_A_ID,
-        period_start=date(2024, 1, 1),
-        period_end=date(2024, 6, 15),
-        is_taxable=True,
-        base_currency="USD",
-        holdings=_holdings_from_lots(PORTFOLIO_A_HOLDINGS, lots),
+        holdings_symbols=PORTFOLIO_A_HOLDINGS,
         lots=lots,
         sales=sales,
         dividends=dividends,
         purchases=purchases,
-        realized=_realized(sales),
+        as_of=as_of,
+        wash_symbol="SPY",
     )
 
 
-def portfolio_b_spec() -> BrokerageStatementSpec:
+def portfolio_b_spec(*, as_of: date | None = None) -> BrokerageStatementSpec:
     lots = _portfolio_b_lots()
     sales = _portfolio_b_sales()
     dividends, purchases = _portfolio_b_income()
-    return BrokerageStatementSpec(
-        statement_id="BRK-B-2024-06",
+    if as_of is None:
+        return _assemble_spec(
+            statement_id="BRK-B-2024-06",
+            account_id=PORTFOLIO_B_ID,
+            user_id=USER_B_ID,
+            period_start=date(2024, 1, 1),
+            period_end=date(2024, 6, 15),
+            holdings_symbols=PORTFOLIO_B_HOLDINGS,
+            lots=lots,
+            sales=sales,
+            dividends=dividends,
+            purchases=purchases,
+        )
+    return _current_demo_spec(
+        prefix="B",
         account_id=PORTFOLIO_B_ID,
-        portfolio_id=PORTFOLIO_B_ID,
         user_id=USER_B_ID,
-        period_start=date(2024, 1, 1),
-        period_end=date(2024, 6, 15),
+        holdings_symbols=PORTFOLIO_B_HOLDINGS,
+        lots=lots,
+        sales=sales,
+        dividends=dividends,
+        purchases=purchases,
+        as_of=as_of,
+        wash_symbol="VNQ",
+    )
+
+
+def _assemble_spec(
+    *,
+    statement_id: str,
+    account_id: UUID,
+    user_id: UUID,
+    period_start: date,
+    period_end: date,
+    holdings_symbols: list[str],
+    lots: list[LotSpec],
+    sales: list[SaleSpec],
+    dividends: list[DividendSpec],
+    purchases: list[PurchaseSpec],
+) -> BrokerageStatementSpec:
+    return BrokerageStatementSpec(
+        statement_id=statement_id,
+        account_id=account_id,
+        portfolio_id=account_id,
+        user_id=user_id,
+        period_start=period_start,
+        period_end=period_end,
         is_taxable=True,
         base_currency="USD",
-        holdings=_holdings_from_lots(PORTFOLIO_B_HOLDINGS, lots),
+        holdings=_holdings_from_lots(holdings_symbols, lots),
         lots=lots,
         sales=sales,
         dividends=dividends,
         purchases=purchases,
         realized=_realized(sales),
     )
+
+
+def _current_demo_spec(
+    *,
+    prefix: str,
+    account_id: UUID,
+    user_id: UUID,
+    holdings_symbols: list[str],
+    lots: list[LotSpec],
+    sales: list[SaleSpec],
+    dividends: list[DividendSpec],
+    purchases: list[PurchaseSpec],
+    as_of: date,
+    wash_symbol: str,
+) -> BrokerageStatementSpec:
+    lots = [replace(lot, acquisition_date=shift_from_historical(lot.acquisition_date, as_of)) for lot in lots]
+    sales = [
+        replace(
+            sale,
+            acquisition_date=shift_from_historical(sale.acquisition_date, as_of),
+            sale_date=shift_from_historical(sale.sale_date, as_of),
+        )
+        for sale in sales
+    ]
+    dividends = [replace(div, event_date=shift_from_historical(div.event_date, as_of)) for div in dividends]
+    purchases = [replace(purchase, event_date=shift_from_historical(purchase.event_date, as_of)) for purchase in purchases]
+    dividends, purchases = _apply_current_demo_window_dates(as_of, dividends, purchases, wash_symbol=wash_symbol)
+    return _assemble_spec(
+        statement_id=f"BRK-{prefix}-{as_of.strftime('%Y-%m')}",
+        account_id=account_id,
+        user_id=user_id,
+        period_start=shift_from_historical(date(2024, 1, 1), as_of),
+        period_end=as_of,
+        holdings_symbols=holdings_symbols,
+        lots=lots,
+        sales=sales,
+        dividends=dividends,
+        purchases=purchases,
+    )
+
+
+def _apply_current_demo_window_dates(
+    as_of: date,
+    dividends: list[DividendSpec],
+    purchases: list[PurchaseSpec],
+    *,
+    wash_symbol: str,
+) -> tuple[list[DividendSpec], list[PurchaseSpec]]:
+    wash_day = as_of + timedelta(days=WASH_EQUITY_REINVEST_OFFSET_DAYS)
+    crypto_day = as_of + timedelta(days=CRYPTO_SCHEDULED_BUY_OFFSET_DAYS)
+    patched_purchases: list[PurchaseSpec] = []
+    for purchase in purchases:
+        if purchase.symbol.split("/")[0] == wash_symbol and purchase.is_reinvestment:
+            purchase = replace(purchase, event_date=wash_day)
+        elif purchase.is_scheduled_crypto:
+            purchase = replace(purchase, event_date=crypto_day)
+        patched_purchases.append(purchase)
+    reinvest_dates = {purchase.symbol: purchase.event_date for purchase in patched_purchases if purchase.is_reinvestment}
+    patched_dividends: list[DividendSpec] = []
+    for div in dividends:
+        if div.reinvested and div.symbol in reinvest_dates:
+            div = replace(div, event_date=reinvest_dates[div.symbol])
+        patched_dividends.append(div)
+    return patched_dividends, patched_purchases
 
 
 def _portfolio_a_lots() -> list[LotSpec]:

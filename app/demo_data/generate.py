@@ -3,14 +3,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
 
-from app.adapters.postgres_window_store import PostgresRollingWindowStore
 from app.adapters.storage import LocalStatementStorage
 from app.config import get_settings
 from app.demo_data.bank_generator import build_bank_statements
@@ -26,16 +25,17 @@ from app.demo_data.constants import (
     EUR_USD,
     PORTFOLIO_A_ID,
     PORTFOLIO_B_ID,
-    QUOTE_TS,
     REPLACEMENTS,
-    STALE_QUOTE_TS,
     USER_A_EMAIL,
     USER_A_ID,
     USER_B_EMAIL,
     USER_B_ID,
+    as_of_datetime,
+    parse_demo_as_of_date,
+    quote_timestamps_for,
 )
 from app.domain.enums import AccountType
-from app.persistence.database import get_session_factory, session_scope
+from app.persistence.database import session_scope
 from app.persistence.models import (
     AnomalyGroundTruth,
     Asset,
@@ -53,16 +53,21 @@ from app.providers.protocols import ExecutionPosition, PriceObservation, Provide
 from app.services.ingestion import StatementIngestor
 
 
-def build_fake_providers() -> ProviderRouter:
+def build_fake_providers(
+    as_of: datetime | None = None,
+    *,
+    brokerage_specs=None,
+) -> ProviderRouter:
     equity = FakeEquityQuoteProvider()
     crypto = FakeCryptoQuoteProvider()
     fx = FakeFxProvider()
     execution = FakeExecutionProvider()
     stale = {"ETF:AGG", "EQUITY:NVDA"}
     zero_mirror = {"SCHB", "SCHA"}
-    as_of = AS_OF
+    as_of = as_of or AS_OF
+    quote_ts, stale_ts = quote_timestamps_for(as_of)
     for _symbol, (canonical, provider_symbol, asset_type, _name, price) in ASSET_CATALOG.items():
-        ts = STALE_QUOTE_TS if canonical in stale else QUOTE_TS
+        ts = stale_ts if canonical in stale else quote_ts
         quote = Quote(
             canonical_id=canonical,
             price=price,
@@ -95,9 +100,9 @@ def build_fake_providers() -> ProviderRouter:
             equity.seed_quote(quote)
             equity.seed_history(canonical, history)
         execution.seed_tradable(provider_symbol, True)
-    from app.demo_data.brokerage_generator import portfolio_a_spec, portfolio_b_spec
-
-    for alias, spec in (("conservative-demo", portfolio_a_spec()), ("growth-demo", portfolio_b_spec())):
+    specs = brokerage_specs or (portfolio_a_spec(), portfolio_b_spec())
+    aliases = ("conservative-demo", "growth-demo")
+    for alias, spec in zip(aliases, specs, strict=True):
         for holding in spec.holdings:
             qty = Decimal("0") if holding.symbol in zero_mirror else holding.quantity
             execution.seed_position(
@@ -109,9 +114,12 @@ def build_fake_providers() -> ProviderRouter:
                     asset_class=holding.asset_type.value,
                 )
             )
-    for day_offset in range(0, 200):
-        on = (datetime(2024, 1, 1, tzinfo=UTC) + timedelta(days=day_offset)).date()
+    fx_start = as_of.date() - timedelta(days=400)
+    fx_end = as_of.date() + timedelta(days=40)
+    on = fx_start
+    while on <= fx_end:
         fx.seed_default_majors(on, retrieved_at=as_of)
+        on += timedelta(days=1)
     return ProviderRouter(equity=equity, crypto=crypto, fx=fx, execution=execution)
 
 
@@ -327,13 +335,35 @@ def summarize(session_data: dict) -> str:
     return json.dumps(session_data, indent=2, default=str)
 
 
-async def generate(reset_files: bool = True) -> dict:
+async def generate(
+    reset_files: bool = True,
+    *,
+    mode: str = "historical",
+    as_of_date: date | None = None,
+    min_history: int | None = None,
+) -> dict:
     settings = get_settings()
+    if min_history is None:
+        min_history = settings.min_history_threshold
+    mode = mode.lower()
+    if mode == "current":
+        as_of_date = as_of_date or parse_demo_as_of_date(
+            settings.demo_as_of_date,
+            allow_today=settings.is_local,
+        )
+        as_of = as_of_datetime(as_of_date)
+        statements, labels = build_bank_statements(as_of=as_of_date, min_history=min_history)
+        brokerage = [portfolio_a_spec(as_of=as_of_date), portfolio_b_spec(as_of=as_of_date)]
+        filename_prefix = "current-demo/"
+    else:
+        as_of = AS_OF
+        as_of_date = AS_OF.date()
+        statements, labels = build_bank_statements()
+        brokerage = [portfolio_a_spec(), portfolio_b_spec()]
+        filename_prefix = ""
     storage = LocalStatementStorage(settings.local_data_dir)
-    providers = build_fake_providers()
+    providers = build_fake_providers(as_of, brokerage_specs=brokerage)
     ingestor = StatementIngestor(storage, providers.fx)
-    statements, labels = build_bank_statements()
-    brokerage = [portfolio_a_spec(), portfolio_b_spec()]
     async with session_scope(settings) as session:
         await seed_users(session)
         await seed_replacements(session)
@@ -341,17 +371,42 @@ async def generate(reset_files: bool = True) -> dict:
         await seed_mirrors(session, providers)
         for spec in statements:
             pdf = render_bank_pdf(spec)
-            await ingestor.ingest(session, pdf, f"{spec.statement_id}.pdf")
+            await ingestor.ingest(session, pdf, f"{filename_prefix}{spec.statement_id}.pdf")
         for spec in brokerage:
             pdf = render_brokerage_pdf(spec)
-            await ingestor.ingest(session, pdf, f"{spec.statement_id}.pdf")
+            await ingestor.ingest(session, pdf, f"{filename_prefix}{spec.statement_id}.pdf")
         await seed_labels(session, labels)
         await session.flush()
         summary = await _build_summary(session, labels)
-    summary_path = Path(settings.local_data_dir) / "data_summary.json"
+    summary["mode"] = mode
+    summary["as_of"] = as_of_date.isoformat()
+    summary_name = "current_demo_summary.json" if mode == "current" else "data_summary.json"
+    summary_path = Path(settings.local_data_dir) / summary_name
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
     return summary
+
+
+def write_statement_pdfs(*, mode: str = "historical", as_of_date: date | None = None, dest: Path | None = None) -> list[Path]:
+    """Write PDFs without ingesting. Historical 2024 filenames are never reused for current-demo."""
+    settings = get_settings()
+    if mode == "current":
+        as_of_date = as_of_date or parse_demo_as_of_date(settings.demo_as_of_date, allow_today=settings.is_local)
+        dest = dest or (Path(settings.local_data_dir) / "current-demo")
+        statements, _labels = build_bank_statements(as_of=as_of_date, min_history=settings.min_history_threshold)
+        brokerage = [portfolio_a_spec(as_of=as_of_date), portfolio_b_spec(as_of=as_of_date)]
+    else:
+        dest = dest or Path(settings.local_data_dir) / "historical"
+        statements, _labels = build_bank_statements()
+        brokerage = [portfolio_a_spec(), portfolio_b_spec()]
+    dest.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for spec in [*statements, *brokerage]:
+        renderer = render_bank_pdf if hasattr(spec, "transactions") else render_brokerage_pdf
+        path = dest / f"{spec.statement_id}.pdf"
+        path.write_bytes(renderer(spec))
+        written.append(path)
+    return written
 
 
 async def _build_summary(session, labels) -> dict:
@@ -394,8 +449,24 @@ async def _build_summary(session, labels) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate deterministic Phase 1 demo data")
-    parser.parse_args()
-    summary = asyncio.run(generate())
+    parser.add_argument("--mode", choices=["historical", "current"], default="historical")
+    parser.add_argument(
+        "--as-of",
+        dest="as_of",
+        default=None,
+        help="ISO date or 'today' for current-demo mode. Tests must pass a fixed date.",
+    )
+    parser.add_argument("--pdfs-only", action="store_true", help="Write PDFs without database ingest")
+    args = parser.parse_args()
+    as_of_date = None
+    if args.as_of:
+        settings = get_settings()
+        as_of_date = parse_demo_as_of_date(args.as_of, allow_today=settings.is_local)
+    if args.pdfs_only:
+        paths = write_statement_pdfs(mode=args.mode, as_of_date=as_of_date)
+        print(json.dumps({"mode": args.mode, "pdfs": [str(p) for p in paths]}, indent=2))
+        return
+    summary = asyncio.run(generate(mode=args.mode, as_of_date=as_of_date))
     print(json.dumps(summary, indent=2, default=str))
 
 
