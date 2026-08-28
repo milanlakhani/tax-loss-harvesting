@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:16.6-alpine
+    environment:
+      POSTGRES_USER: finance
+      POSTGRES_PASSWORD: finance
+      POSTGRES_DB: finance
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finance -d finance"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgresql+psycopg://finance:finance@postgres:5432/finance
+      LOCAL_DATA_DIR: /app/local-data
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./local-data:/app/local-data
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+volumes:
+  pgdata:
