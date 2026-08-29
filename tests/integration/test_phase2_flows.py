@@ -49,6 +49,10 @@ async def test_statement_questions_go_through_mcp_handlers(session, session_fact
     assert holdings
     again = await handlers.get_holdings(str(USER_A_ID))
     assert again == holdings
+    insights = await QueryService(session).portfolio_insights(USER_A_ID, providers, AS_OF)
+    assert insights and insights[0]["allocations"]
+    assert {row["asset_class"] for row in insights[0]["allocations"]} >= {"EQUITY", "ETF", "BOND", "CRYPTO"}
+    assert insights[0]["risk_limits"]["max_crypto_weight"] is not None
 
 
 @pytest.mark.integration

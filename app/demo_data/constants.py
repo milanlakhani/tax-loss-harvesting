@@ -39,6 +39,8 @@ def resolve_analysis_as_of(settings, *, today: date | None = None) -> datetime:
     if mode in {"historical", "hist", "regression"}:
         return AS_OF
     allow_today = bool(settings.is_local)
+    if settings.demo_as_of_date.strip().lower() == "today" and allow_today and today is None:
+        return datetime.now(UTC)
     day = parse_demo_as_of_date(settings.demo_as_of_date, allow_today=allow_today, today=today)
     return as_of_datetime(day)
 

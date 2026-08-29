@@ -121,6 +121,13 @@ python -m app.verify_integrations --all
 
 Automated tests mock every HTTP response and SDK call.
 
+## Alpaca paper mirror setup
+
+Run `python -m app.seed_alpaca_paper --portfolio ALIAS --manifest PATH` to preview the
+deterministic BUY plan without submitting orders. After review, temporarily enable paper orders
+and add `--confirm-paper` to submit. Setup purchases use deterministic client order IDs and are
+recorded as `PAPER_MIRROR_SETUP`. Disable paper orders again after the demonstration.
+
 ## Configuration
 
 See `.env.example`. Do not commit `.env`. Harvesting target is an educational ranking target, not a

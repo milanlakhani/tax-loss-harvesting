@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
+from dataclasses import asdict, is_dataclass
+from datetime import date, datetime
+from decimal import Decimal
+from enum import Enum
 from uuid import UUID
 
 from app.container import AppContainer
@@ -27,24 +30,33 @@ MCP_TOOL_NAMES = (
     "get_largest_transactions",
     "get_account_balance_history",
     "get_anomalous_transactions",
+    "get_portfolio_insights",
+    "get_latest_candidate_decisions",
     "get_paper_order_status",
 )
 
 FORBIDDEN_MCP_TOOLS = ("submit_paper_order", "confirm_paper_order", "prepare_paper_order")
 
 
+def _json_value(value):
+    if is_dataclass(value):
+        return {key: _json_value(item) for key, item in asdict(value).items()}
+    if isinstance(value, dict):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_value(item) for item in value]
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, (Decimal, UUID)):
+        return str(value)
+    return value
+
+
 def _json(result) -> dict:
-    if hasattr(result, "__dict__"):
-        data = {}
-        for key, value in result.__dict__.items():
-            if hasattr(value, "value"):
-                data[key] = value.value
-            elif hasattr(value, "isoformat"):
-                data[key] = value.isoformat()
-            else:
-                data[key] = str(value) if value is not None and not isinstance(value, (int, float, bool, dict, list)) else value
-        return data
-    return {"value": result}
+    value = _json_value(result)
+    return value if isinstance(value, dict) else {"value": value}
 
 
 class McpToolHandlers:
@@ -152,7 +164,16 @@ class McpToolHandlers:
 
     async def get_largest_transactions(self, user_id: str) -> dict:
         async with self.container.session_factory() as session:
-            return _json(await StatisticsService(session).largest_transactions(UUID(user_id)))
+            query = QueryService(session)
+            result = _json(await StatisticsService(session).largest_transactions(UUID(user_id)))
+            transactions = await query.transactions(UUID(user_id))
+            by_external = {row["external_id"]: row for row in transactions}
+            result["items"] = [
+                by_external[external_id]
+                for external_id in result.get("breakdown", {})
+                if external_id in by_external
+            ]
+            return result
 
     async def get_account_balance_history(self, user_id: str) -> dict:
         async with self.container.session_factory() as session:
@@ -161,6 +182,18 @@ class McpToolHandlers:
     async def get_anomalous_transactions(self, user_id: str) -> list[dict]:
         async with self.container.session_factory() as session:
             return await QueryService(session).anomalous_transactions(UUID(user_id))
+
+    async def get_portfolio_insights(self, user_id: str) -> list[dict]:
+        async with self.container.session_factory() as session:
+            return await QueryService(session).portfolio_insights(
+                UUID(user_id),
+                self.container.providers,
+                resolve_analysis_as_of(self.container.settings),
+            )
+
+    async def get_latest_candidate_decisions(self, user_id: str) -> dict:
+        async with self.container.session_factory() as session:
+            return await QueryService(session).latest_candidate_decisions(UUID(user_id))
 
     async def get_paper_order_status(self, order_id: str) -> dict:
         async with self.container.session_factory() as session:

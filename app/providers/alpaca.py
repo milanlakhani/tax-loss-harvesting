@@ -9,10 +9,24 @@ from alpaca.trading.enums import OrderSide, OrderType, TimeInForce
 from alpaca.trading.requests import MarketOrderRequest
 
 from app.domain.errors import ProviderError
+from app.providers.mappings import COINGECKO_IDS
 from app.providers.protocols import ExecutionPosition, SubmittedOrder
 
 # Live trading is never constructed from user input or request fields.
 ALPACA_PAPER_FORCED = True
+
+
+def _normalized_asset_class(raw: object) -> str:
+    value = str(raw or "")
+    return "crypto" if "crypto" in value.lower() else "us_equity"
+
+
+def _normalized_position_symbol(raw_symbol: object, asset_class: str) -> str:
+    symbol = str(raw_symbol)
+    if asset_class != "crypto":
+        return symbol
+    compact = symbol.replace("/", "").upper()
+    return next((mapped for mapped in COINGECKO_IDS if mapped.replace("/", "").upper() == compact), symbol)
 
 
 class AlpacaProvider:
@@ -53,13 +67,14 @@ class AlpacaProvider:
         rows = client.get_all_positions()
         out = []
         for pos in rows:
+            asset_class = _normalized_asset_class(getattr(pos, "asset_class", ""))
             out.append(
                 ExecutionPosition(
                     account_alias=account_alias,
-                    symbol=str(pos.symbol),
+                    symbol=_normalized_position_symbol(pos.symbol, asset_class),
                     quantity=Decimal(str(pos.qty)),
                     tradable=True,
-                    asset_class=str(getattr(pos, "asset_class", "") or ""),
+                    asset_class=asset_class,
                 )
             )
         return out
@@ -80,6 +95,29 @@ class AlpacaProvider:
             symbol=symbol,
             qty=float(quantity),
             side=OrderSide.SELL,
+            type=OrderType.MARKET,
+            time_in_force=TimeInForce.DAY if asset_class != "crypto" else TimeInForce.GTC,
+            client_order_id=client_order_id,
+        )
+        order = client.submit_order(request)
+        return self._to_submitted(order, client_order_id, symbol, quantity, asset_class)
+
+    async def submit_market_buy(
+        self,
+        *,
+        account_alias: str,
+        symbol: str,
+        quantity: Decimal,
+        client_order_id: str,
+        asset_class: str,
+    ) -> SubmittedOrder:
+        if not self.enable_paper_orders:
+            raise ProviderError("ENABLE_PAPER_ORDERS=false", self.provider_name)
+        client = self._client(account_alias)
+        request = MarketOrderRequest(
+            symbol=symbol,
+            qty=float(quantity),
+            side=OrderSide.BUY,
             type=OrderType.MARKET,
             time_in_force=TimeInForce.DAY if asset_class != "crypto" else TimeInForce.GTC,
             client_order_id=client_order_id,

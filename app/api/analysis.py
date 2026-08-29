@@ -44,6 +44,7 @@ async def start_analysis(
         "analysis_run_id": str(result.analysis_run_id),
         "user_id": str(result.user_id),
         "status": result.status.value,
+        "failure_reason": result.failure_reason,
         "reused": result.reused,
         "ml_status": result.ml_status.value if result.ml_status else None,
         "approved_candidate_ids": [str(i) for i in result.approved_candidate_ids],
@@ -63,7 +64,12 @@ async def get_analysis(
         run = await session.get(AnalysisRun, analysis_run_id)
         if run is None or run.user_id != demo.user_id:
             raise HTTPException(status_code=404, detail="Not found")
-        return {"analysis_run_id": str(run.id), "status": run.status, "ml_status": run.ml_status}
+        return {
+            "analysis_run_id": str(run.id),
+            "status": run.status,
+            "ml_status": run.ml_status,
+            "failure_reason": run.failure_reason,
+        }
 
 
 @router.get("/analyses/{analysis_run_id}/candidates/approved")

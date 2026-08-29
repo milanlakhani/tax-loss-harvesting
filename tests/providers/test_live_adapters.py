@@ -138,3 +138,20 @@ def test_alpaca_live_mode_cannot_be_enabled_from_request_or_settings_flag():
         client.assert_called_with("key", "secret", paper=True)
         assert client.call_args.kwargs["paper"] is ALPACA_PAPER_FORCED
         assert client.call_args.kwargs["paper"] is not False
+
+
+@pytest.mark.unit
+async def test_alpaca_normalizes_crypto_position_symbols_at_provider_boundary():
+    with patch("app.providers.alpaca.TradingClient") as client_type:
+        client = client_type.return_value
+        client.get_all_positions.return_value = [
+            MagicMock(symbol="BTCUSD", qty="0.07", asset_class="AssetClass.CRYPTO"),
+            MagicMock(symbol="QQQ", qty="10", asset_class="AssetClass.US_EQUITY"),
+        ]
+        provider = AlpacaProvider({"conservative-demo": ("key", "secret")}, enable_paper_orders=False)
+        positions = await provider.list_positions("conservative-demo")
+
+    assert [(p.symbol, p.asset_class) for p in positions] == [
+        ("BTC/USD", "crypto"),
+        ("QQQ", "us_equity"),
+    ]

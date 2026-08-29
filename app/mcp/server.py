@@ -27,6 +27,16 @@ def build_mcp(container: AppContainer):
         return await handlers.parse_statement(filename, data_hex)
 
     @mcp.tool()
+    async def get_portfolio_insights(user_id: str) -> list:
+        """Return current allocation, targets, drift, and configured risk limits."""
+        return await handlers.get_portfolio_insights(user_id)
+
+    @mcp.tool()
+    async def get_latest_candidate_decisions(user_id: str) -> dict:
+        """Return only persisted final approved and protected harvesting decisions."""
+        return await handlers.get_latest_candidate_decisions(user_id)
+
+    @mcp.tool()
     async def run_analysis(user_id: str, idempotency_key: str) -> dict:
         return await handlers.run_analysis_tool(user_id, idempotency_key)
 

@@ -209,6 +209,40 @@ class FakeExecutionProvider:
         self.orders[order.provider_order_id] = order
         return order
 
+    async def submit_market_buy(
+        self,
+        *,
+        account_alias: str,
+        symbol: str,
+        quantity: Decimal,
+        client_order_id: str,
+        asset_class: str,
+    ) -> SubmittedOrder:
+        self.calls.append(("submit_buy", symbol))
+        payload = {
+            "account_alias": account_alias,
+            "symbol": symbol,
+            "quantity": quantity,
+            "client_order_id": client_order_id,
+            "asset_class": asset_class,
+        }
+        self.submit_calls.append(payload)
+        if self.reject_submit:
+            raise LiveProviderAttemptError(self.reject_submit)
+        existing = next((o for o in self.orders.values() if o.client_order_id == client_order_id), None)
+        if existing:
+            return existing
+        order = SubmittedOrder(
+            client_order_id=client_order_id,
+            provider_order_id=f"alpaca-{client_order_id}",
+            status="SUBMITTED",
+            symbol=symbol,
+            quantity=quantity,
+            asset_class=asset_class,
+        )
+        self.orders[order.provider_order_id] = order
+        return order
+
     def seed_fill(self, provider_order_id: str, *, filled_qty: Decimal, fill_price: Decimal, status: str = "FILLED") -> None:
         order = self.orders[provider_order_id]
         order.filled_qty = filled_qty

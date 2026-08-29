@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import Settings, override_settings
@@ -58,10 +59,14 @@ def blocked_live_network():
 
 @pytest.fixture
 def settings(tmp_path) -> Settings:
-    url = os.environ.get(
-        "TEST_DATABASE_URL",
-        os.environ.get("DATABASE_URL", "postgresql+psycopg://finance:finance@localhost:5432/finance"),
-    )
+    url = os.environ.get("TEST_DATABASE_URL")
+    if not url:
+        pytest.fail("TEST_DATABASE_URL is required; tests must never use the application database")
+    app_url = os.environ.get("DATABASE_URL")
+    if app_url and make_url(url).database == make_url(app_url).database:
+        pytest.fail("TEST_DATABASE_URL must name a different database from DATABASE_URL")
+    if not (make_url(url).database or "").endswith("_test"):
+        pytest.fail("TEST_DATABASE_URL database name must end with '_test'")
     cfg = Settings(
         app_env="test",
         database_url=url,

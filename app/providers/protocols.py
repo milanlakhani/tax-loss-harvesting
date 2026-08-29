@@ -188,6 +188,16 @@ class ExecutionProvider(Protocol):
         asset_class: str,
     ) -> SubmittedOrder: ...
 
+    async def submit_market_buy(
+        self,
+        *,
+        account_alias: str,
+        symbol: str,
+        quantity: Decimal,
+        client_order_id: str,
+        asset_class: str,
+    ) -> SubmittedOrder: ...
+
     async def get_order(self, account_alias: str, provider_order_id: str) -> SubmittedOrder | None: ...
 
     async def provider_asset_class(self, symbol: str) -> str | None: ...

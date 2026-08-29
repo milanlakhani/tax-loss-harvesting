@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
+from html import escape
+from uuid import uuid4
 
 import httpx
 import streamlit as st
@@ -11,6 +14,281 @@ from app.ui.confirm_state import confirm_button_enabled
 BACKEND = os.environ.get("BACKEND_URL", "http://localhost:8000")
 PAPER_BANNER = "SIMULATED PAPER TRADE - NO REAL MONEY"
 DEFAULT_USER = "11111111-1111-4111-8111-111111111111"
+
+
+def _inject_style() -> None:
+    st.markdown(
+        """
+        <style>
+        .stApp {background: linear-gradient(135deg,#f7f9fc 0%,#eef4ff 55%,#f8fbff 100%);}
+        [data-testid="stSidebar"] {background:#081426; color:#fff; border-right:1px solid #17263d;}
+        [data-testid="stSidebar"] * {color:#e8efff;}
+        [data-testid="stSidebar"] [role="radiogroup"] label {
+            padding:.5rem .7rem;border-radius:11px;cursor:pointer;
+            transition:background .14s ease,transform .14s ease,box-shadow .14s ease;
+        }
+        [data-testid="stSidebar"] [role="radiogroup"] label:hover {background:#132542;transform:translateX(2px);}
+        [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
+            background:linear-gradient(100deg,#18375d,#0d6567);
+            box-shadow:inset 3px 0 0 #62e6d3,0 6px 15px rgba(0,0,0,.16);
+        }
+        [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) p {color:#ffffff;font-weight:750;}
+        [data-testid="stSidebar"] .stButton>button {
+            width:100%; background:#132542; color:#f4f8ff !important;
+            border:1px solid #385477; border-radius:11px; box-shadow:none;
+        }
+        [data-testid="stSidebar"] .stButton>button:hover {
+            background:#1a3960; color:#ffffff !important; border-color:#62e6d3;
+        }
+        [data-testid="stSidebar"] .stButton>button:focus {
+            color:#ffffff !important; border-color:#62e6d3;
+            box-shadow:0 0 0 2px rgba(98,230,211,.22);
+        }
+        [data-testid="stSidebar"] .stButton>button:disabled {
+            background:#111f34; color:#8495ad !important; border-color:#263a55;
+        }
+        .hero {padding:1.55rem 1.7rem;border-radius:22px;background:linear-gradient(120deg,#081426,#12376b 65%,#0a8f88);color:white;box-shadow:0 16px 40px rgba(8,20,38,.18);margin-bottom:1.2rem;}
+        .hero h1 {font-size:2.15rem;margin:0 0 .35rem;color:white;letter-spacing:-.03em;}
+        .hero p {margin:0;color:#d8e6ff;font-size:1.02rem;}
+        .eyebrow {font-size:.75rem;text-transform:uppercase;letter-spacing:.14em;color:#62e6d3;font-weight:700;margin-bottom:.55rem;}
+        .status-pill {display:inline-block;padding:.28rem .62rem;border-radius:999px;background:#dff8ef;color:#08715c;font-weight:700;font-size:.78rem;margin:.2rem .2rem .2rem 0;}
+        .soft-card {background:rgba(255,255,255,.88);border:1px solid #dfe8f6;border-radius:16px;padding:1rem 1.15rem;box-shadow:0 8px 24px rgba(28,55,90,.06);margin:.45rem 0 1rem;}
+        .section-note {color:#5f6f85;font-size:.92rem;}
+        .status-grid {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1.25rem;margin:1.15rem 0 1.35rem;}
+        .status-grid--2 {grid-template-columns:repeat(2,minmax(0,1fr));}
+        .status-grid--4 {grid-template-columns:repeat(4,minmax(0,1fr));}
+        .status-card {
+            position:relative;min-height:146px;padding:1.25rem 1.35rem;border-radius:20px;
+            background:rgba(255,255,255,.96);border:1px solid #d8e3f2;
+            box-shadow:0 10px 28px rgba(28,55,90,.075);cursor:default;overflow:hidden;
+            transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease;
+        }
+        .status-card::before {content:"";position:absolute;left:0;top:0;bottom:0;width:5px;background:#6e87a8;}
+        .status-card::after {content:"";position:absolute;right:-34px;top:-38px;width:110px;height:110px;border-radius:50%;background:rgba(110,135,168,.08);}
+        .status-card:hover {transform:translateY(-3px);box-shadow:0 16px 36px rgba(28,55,90,.13);border-color:#aec4df;}
+        .status-card--success::before {background:#0a9b8f;}
+        .status-card--success::after {background:rgba(10,155,143,.10);}
+        .status-card--warning::before {background:#e39a26;}
+        .status-card--warning::after {background:rgba(227,154,38,.12);}
+        .status-card__label {color:#617086;font-size:.9rem;font-weight:650;margin-bottom:1rem;}
+        .status-card__value {color:#202c3e;font-size:clamp(1.65rem,2.6vw,2.35rem);font-weight:650;line-height:1.08;letter-spacing:-.025em;}
+        .status-card__meta {color:#78869a;font-size:.78rem;margin-top:.65rem;}
+        div[data-testid="stMetric"] {
+            background:rgba(255,255,255,.96);border:1px solid #d8e3f2;
+            padding:1.05rem 1.15rem;border-radius:18px;
+            box-shadow:0 10px 28px rgba(28,55,90,.075);
+            height:132px;min-height:132px;overflow:hidden;
+            transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease;
+        }
+        div[data-testid="stMetric"]:hover {
+            transform:translateY(-2px);border-color:#a9c4e6;
+            box-shadow:0 14px 34px rgba(28,55,90,.12);
+        }
+        div[data-testid="stMetricLabel"] {font-weight:650;color:#53647b;min-height:1.55rem;}
+        div[data-testid="stMetricValue"] {font-size:clamp(1.65rem,2.25vw,2.2rem);line-height:1.12;margin-top:.4rem;}
+        div[data-testid="stMetricValue"],
+        div[data-testid="stMetricValue"] * {
+            white-space:normal !important;overflow:visible !important;
+            text-overflow:clip !important;overflow-wrap:normal !important;
+        }
+        div[data-testid="stDataFrame"] {border:1px solid #dfe8f6;border-radius:14px;overflow:hidden;}
+        .stButton>button {
+            min-height:3.15rem;height:3.15rem;padding:.65rem 1.2rem;border-radius:12px;
+            font-weight:700;white-space:normal;line-height:1.2;font-size:.96rem;
+            box-sizing:border-box;
+            border:1px solid #c8d6e8;background:#ffffff;color:#163252;
+            box-shadow:0 4px 12px rgba(23,50,82,.07);
+            cursor:pointer;outline:none;
+            transition:transform .14s ease,box-shadow .14s ease,border-color .14s ease,background .14s ease,color .14s ease;
+        }
+        .stButton>button p {margin:0;line-height:1.2;}
+        [class*="st-key-suggestion_"] .stButton>button,
+        [class*="st-key-suggestion_"] button {
+            position:relative;width:100%;height:8.4rem !important;min-height:8.4rem !important;
+            max-height:8.4rem !important;padding:1.2rem 1.15rem 1rem 1.3rem;box-sizing:border-box;
+            justify-content:flex-start;text-align:left;font-size:1rem;overflow:hidden;
+            background:rgba(255,255,255,.96);border-color:#d8e3f2;border-radius:20px;
+            box-shadow:0 10px 28px rgba(28,55,90,.075);
+        }
+        [class*="st-key-suggestion_"] button::after {
+            content:"";position:absolute;right:-34px;top:-38px;width:110px;height:110px;
+            border-radius:50%;background:rgba(10,143,136,.08);pointer-events:none;
+        }
+        [class*="st-key-suggestion_"] button p {
+            position:relative;z-index:1;display:block;width:100%;margin:0;
+            white-space:normal !important;overflow:visible !important;
+            text-overflow:clip !important;line-height:1.28;font-weight:700;
+        }
+        [class*="st-key-suggestion_"] button p::before {
+            display:block;margin-bottom:.65rem;color:#6b7c92;font-size:.68rem;
+            font-weight:800;letter-spacing:.11em;text-transform:uppercase;line-height:1;
+        }
+        .st-key-suggestion_0 button {border-left:5px solid #e39a26 !important;}
+        .st-key-suggestion_0 button p::before {content:"Spending signals";}
+        .st-key-suggestion_0 button::after {background:rgba(227,154,38,.11);}
+        .st-key-suggestion_1 button {border-left:5px solid #0a9b8f !important;}
+        .st-key-suggestion_1 button p::before {content:"Risk controls";}
+        .st-key-suggestion_2 button {border-left:5px solid #5279aa !important;}
+        .st-key-suggestion_2 button p::before {content:"Allocation drift";}
+        .st-key-suggestion_2 button::after {background:rgba(82,121,170,.10);}
+        .st-key-suggestion_3 button {border-left:5px solid #0a9b8f !important;}
+        .st-key-suggestion_3 button p::before {content:"Tax safety";}
+        .stButton>button:hover {
+            color:#0a706c;border-color:#1bb6aa;background:#f5fffd;
+            box-shadow:0 7px 18px rgba(10,112,108,.13);transform:translateY(-1px);
+        }
+        .stButton>button:active {
+            transform:translateY(1px) scale(.99);box-shadow:0 2px 7px rgba(10,112,108,.14);
+        }
+        .stButton>button:focus {outline:none;}
+        .stButton>button:focus-visible {
+            outline:3px solid rgba(27,182,170,.28);outline-offset:2px;border-color:#0a8f88;
+            box-shadow:0 0 0 1px #0a8f88;
+        }
+        .stButton>button:disabled {
+            cursor:not-allowed;transform:none;box-shadow:none;opacity:.62;
+            background:#edf1f6;color:#7b8798;border-color:#d6dee9;
+        }
+        .stButton>button[kind="primary"] {
+            background:linear-gradient(120deg,#12376b,#0a8f88);color:#ffffff;
+            border-color:transparent;box-shadow:0 8px 20px rgba(18,55,107,.2);
+        }
+        .stButton>button[kind="primary"]:hover {
+            background:linear-gradient(120deg,#0d2d5c,#087b75);color:#ffffff;
+            box-shadow:0 10px 24px rgba(10,93,112,.26);
+        }
+        [class*="st-key-suggestion_"] button[kind="primary"] {
+            background:linear-gradient(135deg,#12376b,#0a8f88);color:#ffffff;
+            border-color:transparent;box-shadow:0 10px 24px rgba(10,112,108,.22);
+        }
+        [class*="st-key-suggestion_"] button[kind="primary"] p,
+        [class*="st-key-suggestion_"] button[kind="primary"] p::before {color:#ffffff;}
+        [class*="st-key-suggestion_"] button[kind="primary"]::after {background:rgba(255,255,255,.09);}
+        [data-testid="stSelectbox"] [data-baseweb="select"] > div,
+        [data-testid="stCheckbox"] label,
+        [data-testid="stExpander"] summary {cursor:pointer;}
+        [data-testid="stFormSubmitButton"]>button {
+            min-width:12rem;height:3.15rem;border-radius:12px;font-weight:700;
+        }
+        @media (max-width:900px) {
+            .status-grid {grid-template-columns:1fr;gap:.8rem;}
+            .status-card {min-height:118px;}
+            div[data-testid="stMetric"] {height:116px;min-height:116px;}
+            div[data-testid="stMetricValue"] {font-size:1.7rem;}
+            [class*="st-key-suggestion_"] button {
+                height:7.25rem !important;min-height:7.25rem !important;max-height:7.25rem !important;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _hero() -> None:
+    st.markdown(
+        """<div class="hero"><div class="eyebrow">Portfolio Intelligence · Paper Trading</div>
+        <h1>Northstar Wealth Copilot</h1>
+        <p>Spending intelligence, portfolio risk and tax-loss opportunities—with deterministic safety controls.</p></div>""",
+        unsafe_allow_html=True,
+    )
+
+
+def _friendly_code(value: str | None) -> str:
+    if not value:
+        return "—"
+    return value.replace("_", " ").title()
+
+
+def _percent(value) -> str:
+    try:
+        return f"{float(value) * 100:.1f}%"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _currency(value, currency: str = "USD") -> str:
+    try:
+        return f"{currency} {float(value):,.2f}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _compact_currency(value, currency: str = "USD") -> str:
+    """Keep headline currency metrics readable without losing the exact tooltip value."""
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    absolute = abs(amount)
+    if absolute >= 1_000_000_000:
+        display = f"{amount / 1_000_000_000:.1f}B"
+    elif absolute >= 1_000_000:
+        display = f"{amount / 1_000_000:.1f}M"
+    elif absolute >= 1_000:
+        display = f"{amount / 1_000:.1f}K"
+    else:
+        display = f"{amount:,.2f}"
+    return f"{currency} {display}"
+
+
+def _status_cards(cards: list[dict]) -> None:
+    """Render one consistent, non-clickable summary-card system across the app."""
+    count = min(max(len(cards), 1), 4)
+    grid_class = f" status-grid--{count}" if count in {2, 4} else ""
+    blocks = []
+    for card in cards:
+        variant = card.get("variant") if card.get("variant") in {"success", "warning"} else ""
+        variant_class = f" status-card--{variant}" if variant else ""
+        blocks.append(
+            f'''<div class="status-card{variant_class}" title="{escape(str(card.get('title') or card.get('meta') or 'Summary'))}">
+              <div class="status-card__label">{escape(str(card.get('label') or 'Summary'))}</div>
+              <div class="status-card__value">{escape(str(card.get('value') if card.get('value') is not None else '—'))}</div>
+              <div class="status-card__meta">{escape(str(card.get('meta') or 'Current persisted value'))}</div>
+            </div>'''
+        )
+    st.markdown(f'<div class="status-grid{grid_class}">{"".join(blocks)}</div>', unsafe_allow_html=True)
+
+
+def _friendly_chat(reply: dict | None) -> None:
+    if not reply:
+        return
+    text = str(reply.get("reply") or "")
+    if reply.get("mode") == "llm":
+        st.markdown(text)
+        st.caption("AI-assisted explanation · Financial values retrieved from application tools")
+        return
+    value = re.search(r"value=Decimal\('([^']+)'\)", text)
+    currency = re.search(r"currency='([^']+)'", text)
+    count = re.search(r"transaction_count=(\d+)", text)
+    if value and currency:
+        st.success("Authoritative answer retrieved")
+        _status_cards([
+            {"label": "Calculated value", "value": f"{currency.group(1)} {float(value.group(1)):,.2f}", "meta": "Authoritative application result", "variant": "success"},
+            {"label": "Transactions analysed", "value": count.group(1) if count else "—", "meta": "Included in this answer"},
+        ])
+    else:
+        st.info(text or "No result returned.")
+    with st.expander("Technical audit details"):
+        st.json(reply)
+
+
+def _ask_financial_question(question: str) -> None:
+    if not question.strip():
+        return
+    log = st.session_state.setdefault("chat_log", [])
+    log.append({"role": "user", "content": question.strip()})
+    reply = _post("/api/orchestrator-sessions/chat", json={"message": question.strip()})
+    if reply:
+        log.append(
+            {
+                "role": "assistant",
+                "content": str(reply.get("reply") or "No answer returned."),
+                "mode": reply.get("mode", "deterministic_fallback"),
+            }
+        )
+    else:
+        log.append({"role": "assistant", "content": "I could not reach the financial service. Please try again.", "mode": "error"})
 
 
 def _ensure_demo_session() -> str:
@@ -56,7 +334,16 @@ def _post(path: str, json: dict | None = None, files=None):
 def _resume_orchestrator() -> None:
     if st.session_state.get("orchestrator_session_id"):
         return
-    data = _get("/api/orchestrator-sessions/active")
+    try:
+        response = httpx.get(f"{BACKEND}/api/orchestrator-sessions/active", headers=_headers(), timeout=15.0)
+        if response.status_code == 404:
+            data = None
+        else:
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPError as exc:
+        st.error(f"Backend unavailable: {exc}")
+        data = None
     if data and data.get("session_id"):
         st.session_state.orchestrator_session_id = data["session_id"]
         return
@@ -70,6 +357,23 @@ def _reset_orchestrator() -> None:
     if created:
         st.session_state.orchestrator_session_id = created.get("session_id")
         st.session_state.chat_log = []
+
+
+def _load_analysis_candidates(analysis_run_id: str) -> None:
+    approved = _get(f"/api/analyses/{analysis_run_id}/candidates/approved")
+    rejected = _get(f"/api/analyses/{analysis_run_id}/candidates/rejected")
+    if approved is not None:
+        st.session_state.approved_candidates = approved.get("candidates", [])
+    if rejected is not None:
+        st.session_state.rejected_candidates = rejected.get("candidates", [])
+
+
+def _analysis_failure_message(reason: str | None) -> str:
+    if reason and "lock:" in reason:
+        return "Another analysis was already running for this portfolio. Its safety lock prevented an overlapping run. Please run the analysis again."
+    if reason:
+        return f"The analysis stopped safely: {reason}"
+    return "The analysis stopped safely before producing recommendations. Please try again or review the backend logs."
 
 
 def render_confirm_panel(
@@ -125,10 +429,8 @@ def render_confirm_panel(
 
 def main() -> None:
     st.set_page_config(page_title="Tax-loss harvesting demo", layout="wide")
-    st.title("Tax-loss harvesting demonstration")
-    st.caption(
-        "Server-bound demo session. This is not authentication. AWS ALB IP allowlisting is separate."
-    )
+    _inject_style()
+    _hero()
     _ensure_demo_session()
     _resume_orchestrator()
     page = st.sidebar.radio(
@@ -138,12 +440,17 @@ def main() -> None:
             "Bank statement upload",
             "Statement questions",
             "Spending anomalies",
+            "Portfolio analysis",
             "Portfolio drift",
             "Tax-loss candidates",
             "Evaluation details",
             "Paper orders",
         ],
     )
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**System status**")
+    st.sidebar.markdown('<span class="status-pill">● API online</span><span class="status-pill">Paper only</span>', unsafe_allow_html=True)
+    st.sidebar.caption("Demo user · Alex Morgan\n\nSafety rules · harvest_gates_v1")
     if st.sidebar.button("Reset conversation"):
         _reset_orchestrator()
     if st.sidebar.button("Close conversation"):
@@ -151,35 +458,291 @@ def main() -> None:
         st.session_state.orchestrator_session_id = None
 
     if page == "Portfolio overview":
-        st.write(_get("/api/holdings") or "Holdings are loaded from PostgreSQL on each request.")
-        if st.button("Refresh holdings via MCP-backed API"):
-            st.session_state.pop("holdings_cache", None)
-        st.caption("Conversation memory is never used as financial source of truth.")
+        st.header("Portfolio overview")
+        st.caption("A clear view of the current synthetic portfolio used for the paper-trading demonstration.")
+        data = _get("/api/holdings") or {"holdings": []}
+        holdings = data.get("holdings", [])
+        insights = (_get("/api/portfolio-insights") or {}).get("portfolios", [])
+        total_value = sum(float(item.get("total_value") or 0) for item in insights)
+        _status_cards([
+            {"label": "Positions", "value": len(holdings), "meta": "Current holdings"},
+            {"label": "Asset classes", "value": len({h.get('asset_type') for h in holdings}), "meta": "Portfolio diversification", "variant": "success"},
+            {"label": "Estimated value", "value": _compact_currency(total_value), "meta": f"Full value: {_currency(total_value)}"},
+            {"label": "Taxable accounts", "value": len({h.get('portfolio_id') for h in holdings}), "meta": "Eligible account scope"},
+        ])
+        st.subheader("Holdings")
+        if holdings:
+            st.dataframe(
+                [{"Symbol":h.get("symbol"),"Name":h.get("name"),"Type":_friendly_code(h.get("asset_type")),"Quantity":h.get("quantity"),"Account":h.get("account"),"As of":h.get("as_of","")[:10]} for h in holdings],
+                use_container_width=True,
+                hide_index=True,
+            )
+        st.caption("Authoritative values are reloaded from PostgreSQL; conversation memory is never a financial source of truth.")
     elif page == "Bank statement upload":
-        uploaded = st.file_uploader("Bank statement PDF", type=["pdf"])
-        if uploaded and st.button("Ingest statement"):
-            files = {"file": (uploaded.name, uploaded.getvalue(), "application/pdf")}
-            st.write(_post("/api/statements", files=files))
+        with st.form("bank_statement_upload_form", clear_on_submit=True):
+            uploaded = st.file_uploader("Bank statement PDF", type=["pdf"])
+            submitted = st.form_submit_button("Ingest statement")
+
+        if uploaded is not None and submitted:
+            if uploaded.type and uploaded.type.lower() != "application/pdf":
+                st.error("Only PDF files can be uploaded.")
+            else:
+                files = {"file": (uploaded.name, uploaded.getvalue(), "application/pdf")}
+                result = _post("/api/statements", files=files)
+                if result:
+                    if result.get("status") == "duplicate":
+                        st.info("This statement was already imported, so no transactions were duplicated.")
+                    else:
+                        st.success("Statement imported successfully. Its transactions are now available for questions and analysis.")
+                    _status_cards([
+                        {"label": "Document type", "value": _friendly_code(result.get("format")), "meta": "Detected parser format"},
+                        {"label": "Import result", "value": _friendly_code(result.get("status")), "meta": "Persisted ingestion status", "variant": "success"},
+                    ])
+                    with st.expander("Import audit details"):
+                        st.json(result)
+                else:
+                    st.error("Upload failed. Please confirm the PDF is valid and the backend is reachable.")
+        elif submitted and uploaded is None:
+            st.warning("Choose a PDF file before ingesting.")
     elif page == "Statement questions":
-        question = st.text_input("Ask about statements (Enter sends chat, never confirms an order)")
-        if st.button("Ask") and question:
-            reply = _post("/api/orchestrator-sessions/chat", json={"message": question})
-            st.write(reply)
-            st.caption("Answers come from MCP tools on this request, not remembered tool output.")
+        st.header("Ask your financial data")
+        st.caption("Ask naturally about statement-derived spending, anomaly signals, portfolio risk, allocation drift, and safely evaluated tax-loss opportunities.")
+        st.markdown("**Try one of these questions**")
+        suggestions = [
+            "Show my unusual spending.",
+            "Is my portfolio within its risk limits?",
+            "How far is my portfolio from its target allocation?",
+            "Do I have any safe tax-loss opportunities?",
+        ]
+        cols = st.columns(4)
+        for index, suggestion in enumerate(suggestions):
+            selected = st.session_state.get("selected_suggestion") == index
+            if cols[index].button(
+                suggestion,
+                key=f"suggestion_{index}",
+                use_container_width=True,
+                type="primary" if selected else "secondary",
+            ):
+                st.session_state.selected_suggestion = index
+                _ask_financial_question(suggestion)
+                st.rerun()
+        for item in st.session_state.get("chat_log", []):
+            with st.chat_message(item.get("role", "assistant")):
+                st.markdown(item.get("content", ""))
+                if item.get("role") == "assistant":
+                    if item.get("mode") == "llm":
+                        st.caption("AI-assisted explanation · Values retrieved from authoritative tools")
+                    elif item.get("mode") == "deterministic_fallback":
+                        st.caption("Deterministic fallback · Values retrieved directly from application tools")
+        question = st.chat_input("Ask about spending, income, holdings, anomalies, or analysis")
+        if question:
+            _ask_financial_question(question)
+            st.rerun()
+        st.info("Safety boundary: AI can explain and retrieve information, but cannot approve or submit an order.")
     elif page == "Spending anomalies":
-        st.write("Anomalies are loaded from persisted IsolationForest scores via the backend.")
+        st.header("Spending anomalies")
+        st.caption("Unusual transactions identified by the persisted Isolation Forest model.")
+        anomalies = (_get("/api/anomalies") or {}).get("anomalies", [])
+        model_status = anomalies[0].get("ml_status") if anomalies else "Run analysis"
+        review_status = "Attention needed" if anomalies else "No flags"
+        review_class = "warning" if anomalies else "success"
+        _status_cards([
+            {"label": "Flagged transactions", "value": f"{len(anomalies):,}", "meta": "Persisted review signals"},
+            {"label": "Model", "value": _friendly_code(model_status), "meta": "Isolation Forest analysis", "variant": "success"},
+            {"label": "Review status", "value": review_status, "meta": "Signals are not proof of fraud", "variant": review_class},
+        ])
+        if anomalies:
+            st.dataframe(
+                [{"Date":a.get("date"),"Merchant":a.get("merchant"),"Amount":f"{a.get('currency','')} {a.get('amount','')}","Anomaly score":round(float(a.get("normalized_score",0)),3),"Status":"Review"} for a in anomalies],
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("Run portfolio analysis to generate anomaly scores.")
+    elif page == "Portfolio analysis":
+        st.header("Portfolio analysis")
+        st.caption("One controlled run evaluates spending, drift, tax lots, wash-sale conflicts and risk limits.")
+        st.markdown('<div class="soft-card"><b>What happens in this run</b><br><span class="section-note">Live or mocked quotes → anomaly scoring → portfolio risk → candidate generation → deterministic safety evaluation.</span></div>', unsafe_allow_html=True)
+        if st.button("Run analysis", type="primary"):
+            with st.spinner("Running anomaly, drift, harvesting, and safety evaluation…"):
+                result = _post(
+                    "/api/analyses",
+                    json={"idempotency_key": f"streamlit-{uuid4().hex}", "trigger": "API"},
+                )
+            if result:
+                run_id = result["analysis_run_id"]
+                st.session_state.analysis_attempt = result
+                if result.get("status") == "COMPLETED":
+                    st.session_state.analysis_run_id = run_id
+                    st.session_state.analysis_result = result
+                    _load_analysis_candidates(run_id)
+                    st.success(f"Analysis completed: {run_id}")
+                else:
+                    st.error(_analysis_failure_message(result.get("failure_reason")))
+        attempt = st.session_state.get("analysis_attempt")
+        result = attempt or st.session_state.get("analysis_result")
+        if result:
+            completed = result.get("status") == "COMPLETED"
+            approved = st.session_state.get('approved_candidates', []) if completed else []
+            rejected = st.session_state.get('rejected_candidates', []) if completed else []
+            _status_cards([
+                {"label": "Run status", "value": "Complete" if completed else _friendly_code(result.get("status")), "meta": "Persisted pipeline result", "variant": "success" if completed else "warning"},
+                {"label": "ML status", "value": _friendly_code(result.get("ml_status")), "meta": "Anomaly model state", "variant": "success" if result.get("ml_status") == "FITTED" else ""},
+                {"label": "Approved", "value": len(approved), "meta": "Passed every hard gate", "variant": "success" if approved else ""},
+                {"label": "Protected / rejected", "value": len(rejected), "meta": "Blocked by safety controls", "variant": "warning" if rejected else "success"},
+            ])
+            if completed:
+                st.success("Analysis completed and every candidate received a persisted final decision.")
+            else:
+                st.error(_analysis_failure_message(result.get("failure_reason")))
+                if st.session_state.get("analysis_result"):
+                    st.info("Your last successful analysis remains available on the candidate and evaluation pages.")
+            with st.expander("Analysis audit record"):
+                st.json(result)
     elif page == "Portfolio drift":
-        st.write("Drift and warnings are computed by application services, not the UI.")
+        st.header("Portfolio risk & drift")
+        st.caption("Current allocation compared with the portfolio's approved target and risk limits.")
+        result = st.session_state.get("analysis_result")
+        approved = st.session_state.get("approved_candidates", [])
+        rejected = st.session_state.get("rejected_candidates", [])
+        portfolios = (_get("/api/portfolio-insights") or {}).get("portfolios", [])
+        if not portfolios:
+            st.warning("No brokerage portfolio is available for allocation analysis.")
+        else:
+            options = {f"{item.get('account')} · {_friendly_code(item.get('profile'))}": item for item in portfolios}
+            portfolio = options[st.selectbox("Portfolio", list(options))]
+            allocations = portfolio.get("allocations", [])
+            off_target = [row for row in allocations if row.get("status") != "ON_TARGET"]
+            portfolio_currency = portfolio.get("base_currency") or "USD"
+            _status_cards([
+                {"label": "Portfolio value", "value": _compact_currency(portfolio.get("total_value"), portfolio_currency), "meta": f"Full value: {_currency(portfolio.get('total_value'), portfolio_currency)}"},
+                {"label": "Risk profile", "value": _friendly_code(portfolio.get("profile")), "meta": "Configured tolerance", "variant": "success"},
+                {"label": "Classes off target", "value": len(off_target), "meta": "Outside 5% tolerance", "variant": "warning" if off_target else "success"},
+                {"label": "Analysis readiness", "value": "Complete" if result else "Not run", "meta": "Latest controlled run", "variant": "success" if result else "warning"},
+            ])
+            chart_rows = [
+                {
+                    "Asset class": _friendly_code(row.get("asset_class")),
+                    "Current %": round(float(row.get("current_weight") or 0) * 100, 2),
+                    "Target %": round(float(row.get("target_weight") or 0) * 100, 2),
+                }
+                for row in allocations
+            ]
+            st.subheader("Allocation versus target")
+            if chart_rows:
+                st.bar_chart(chart_rows, x="Asset class", y=["Current %", "Target %"], color=["#0a8f88", "#9bb4d3"])
+                st.dataframe(
+                    [
+                        {
+                            "Asset class": _friendly_code(row.get("asset_class")),
+                            "Current": _percent(row.get("current_weight")),
+                            "Target": _percent(row.get("target_weight")),
+                            "Difference": _percent(row.get("drift")),
+                            "Status": _friendly_code(row.get("status")),
+                        }
+                        for row in allocations
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            if off_target:
+                names = ", ".join(_friendly_code(row.get("asset_class")) for row in off_target)
+                st.warning(f"Management attention: {names} {'is' if len(off_target) == 1 else 'are'} more than 5 percentage points from target.")
+            else:
+                st.success("Every asset class is within 5 percentage points of its target allocation.")
+            limits = portfolio.get("risk_limits") or {}
+            st.subheader("Risk guardrails")
+            st.dataframe(
+                [
+                    {"Guardrail": "Maximum crypto", "Limit": _percent(limits.get("max_crypto_weight"))},
+                    {"Guardrail": "Maximum equities and equity ETFs", "Limit": _percent(limits.get("max_equity_weight"))},
+                    {"Guardrail": "Maximum single asset", "Limit": _percent(limits.get("max_single_asset_weight"))},
+                    {"Guardrail": "Minimum bonds", "Limit": _percent(limits.get("min_bond_weight"))},
+                    {"Guardrail": "Maximum turnover", "Limit": _percent(limits.get("max_turnover"))},
+                    {"Guardrail": "Maximum trade size", "Limit": _currency(limits.get("max_trade_notional"), portfolio.get("base_currency") or "USD")},
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+            if portfolio.get("stale_symbols"):
+                st.info("Allocation uses the latest available prices. Markets are closed or quotes are older for: " + ", ".join(portfolio["stale_symbols"]) + ".")
+            if portfolio.get("missing_symbols"):
+                st.warning("No price was available for: " + ", ".join(portfolio["missing_symbols"]) + ". These assets are excluded from the displayed value and weights.")
+        st.markdown('<div class="soft-card"><b>How to read this</b><br><span class="section-note">Positive difference means overweight; negative difference means underweight. Recommendations remain blocked whenever a proposed sale would violate a configured guardrail.</span></div>', unsafe_allow_html=True)
+        if rejected:
+            reasons = {}
+            for item in rejected:
+                label = _friendly_code(item.get("rejection_code"))
+                reasons[label] = reasons.get(label, 0) + 1
+            st.subheader("Why recommendations were blocked")
+            st.dataframe([{"Control":k,"Candidates":v} for k,v in sorted(reasons.items(), key=lambda x:-x[1])], use_container_width=True, hide_index=True)
+        else:
+            st.info("Run Portfolio analysis to populate the risk view.")
     elif page == "Tax-loss candidates":
-        st.subheader("Approved")
-        st.write(st.session_state.get("approved_candidates") or [])
-        st.subheader("Rejected")
-        st.write(st.session_state.get("rejected_candidates") or [])
+        st.header("Tax-loss opportunities")
+        st.caption("Only candidates that pass every hard gate appear in the approved list.")
+        run_id = st.session_state.get("analysis_run_id")
+        if run_id and st.button("Refresh latest candidates"):
+            _load_analysis_candidates(run_id)
+        if not run_id:
+            attempt = st.session_state.get("analysis_attempt")
+            if attempt and attempt.get("status") == "FAILED":
+                st.warning("The latest attempt did not complete, so no candidate decision is being shown. Run Portfolio analysis again.")
+            else:
+                st.info("Run Portfolio analysis first.")
+        approved = st.session_state.get("approved_candidates") or []
+        rejected = st.session_state.get("rejected_candidates") or []
+        _status_cards([
+            {"label": "Approved", "value": len(approved), "meta": "Passed all safety gates", "variant": "success" if approved else ""},
+            {"label": "Blocked", "value": len(rejected), "meta": "Protected by deterministic rules", "variant": "warning" if rejected else "success"},
+            {"label": "Decision policy", "value": "Fail closed", "meta": "Uncertain candidates never proceed", "variant": "success"},
+        ])
+        st.subheader("Approved opportunities")
+        if approved:
+            st.dataframe([{"Rank":x.get("rank"),"Symbol":x.get("symbol"),"Type":x.get("asset_type"),"Quantity":x.get("selected_quantity"),"Estimated loss":x.get("estimated_loss"),"Reference price":x.get("reference_price"),"Provider":x.get("quote_provider"),"Decision":"Approved","Candidate ID":x.get("candidate_id")} for x in approved], use_container_width=True, hide_index=True)
+        elif run_id:
+            st.info("No candidate currently passes every safety rule. This is a valid fail-closed outcome.")
+        st.subheader("Protected decisions")
+        if rejected:
+            st.dataframe([{"Symbol":x.get("symbol"),"Status":_friendly_code(x.get("status")),"Control":_friendly_code(x.get("rejection_code")),"Why it matters":x.get("explanation"),"Candidate ID":x.get("candidate_id")} for x in rejected], use_container_width=True, hide_index=True)
     elif page == "Evaluation details":
-        st.write(st.session_state.get("evaluation_details") or "Select a candidate after analysis.")
+        st.header("Evaluation details")
+        st.caption("Inspect the evidence and final policy decision for any candidate.")
+        candidates = (st.session_state.get("approved_candidates") or []) + (st.session_state.get("rejected_candidates") or [])
+        if not candidates:
+            attempt = st.session_state.get("analysis_attempt")
+            if attempt and attempt.get("status") == "FAILED":
+                st.warning("The latest analysis attempt failed safely and produced no final candidate decisions. Run Portfolio analysis again.")
+            else:
+                st.info("Run Portfolio analysis first.")
+        else:
+            options = {f"{x.get('symbol','Unknown')} · {_friendly_code(x.get('status'))} · {str(x.get('candidate_id'))[:8]}": x for x in candidates}
+            selected = options[st.selectbox("Select candidate", list(options))]
+            approved_decision = selected.get("status") == "APPROVED"
+            _status_cards([
+                {"label": "Decision", "value": _friendly_code(selected.get("status")), "meta": "Persisted Eval Agent result", "variant": "success" if approved_decision else "warning"},
+                {"label": "Symbol", "value": selected.get("symbol") or "—", "meta": _friendly_code(selected.get("asset_type"))},
+                {"label": "Estimated loss", "value": _currency(selected.get("estimated_loss")), "meta": "Before execution", "variant": "success" if approved_decision else ""},
+            ])
+            if selected.get("status") == "APPROVED":
+                st.success("Passed every configured hard gate and is eligible for paper-order preparation.")
+            else:
+                st.warning(selected.get("explanation") or "Candidate blocked by policy.")
+            st.dataframe([{"Field":"Account","Value":selected.get("account")},{"Field":"Asset type","Value":selected.get("asset_type")},{"Field":"Quantity","Value":selected.get("selected_quantity")},{"Field":"Reference price","Value":selected.get("reference_price")},{"Field":"Quote provider","Value":selected.get("quote_provider")},{"Field":"Replacement","Value":selected.get("replacement")},{"Field":"Rule version","Value":selected.get("rule_version")},{"Field":"Candidate ID","Value":selected.get("candidate_id")}], use_container_width=True, hide_index=True)
     elif page == "Paper orders":
-        candidate_id = st.text_input("Candidate ID (server-issued)", key="prepare_candidate_id")
-        if st.button("Prepare paper order") and candidate_id:
+        st.header("Paper order review")
+        st.caption("Select an approved opportunity, review a read-only snapshot, then use the separate confirmation control.")
+        approved_candidates = st.session_state.get("approved_candidates") or []
+        candidate_id = None
+        if approved_candidates:
+            choices = {
+                f"#{item.get('rank') or '—'} · {item.get('symbol')} · {item.get('account')} · {_currency(item.get('estimated_loss'))} estimated loss": item.get("candidate_id")
+                for item in approved_candidates
+            }
+            candidate_id = choices[st.selectbox("Approved opportunity", list(choices))]
+        else:
+            st.info("Run Portfolio analysis first. Only opportunities that pass every safety rule can be prepared.")
+        if st.button("Prepare paper order", type="primary", disabled=not candidate_id) and candidate_id:
             prepared = _post(f"/api/candidates/{candidate_id}/prepare")
             if prepared:
                 st.session_state.prepared_snapshot = prepared

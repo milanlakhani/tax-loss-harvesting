@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     normal_monthly_income_lookback_months: int = 3
 
     openai_api_key: str | None = None
+    openai_model: str = "gpt-4.1-mini"
+    enable_llm_orchestrator: bool = True
     alpha_vantage_api_key: str | None = None
     coingecko_api_key: str | None = None
     coingecko_api_plan: str = "demo"

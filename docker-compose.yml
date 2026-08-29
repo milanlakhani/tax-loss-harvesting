@@ -9,6 +9,7 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/10-test-db.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U finance -d finance"]
       interval: 5s
@@ -23,6 +24,7 @@ services:
     environment:
       APP_ENV: local
       DATABASE_URL: postgresql+psycopg://finance:finance@postgres:5432/finance
+      TEST_DATABASE_URL: postgresql+psycopg://finance:finance@postgres:5432/finance_test
       LOCAL_DATA_DIR: /app/local-data
     env_file:
       - path: .env
@@ -40,6 +42,7 @@ services:
       - backend
     environment:
       BACKEND_URL: http://backend:8000
+      PYTHONPATH: /app
     env_file:
       - path: .env
         required: false
