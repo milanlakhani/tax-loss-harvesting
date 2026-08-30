@@ -18,10 +18,22 @@ from app.providers.alpaca import AlpacaProvider
 from app.providers.mappings import expected_alpaca_asset_class
 from app.providers.protocols import ExecutionProvider
 
+CRYPTO_SEED_BUFFER_BPS = Decimal("50")
+_BPS = Decimal("10000")
 
-def seed_client_order_id(portfolio_id: UUID, manifest_digest: str, symbol: str) -> str:
+
+def seed_client_order_id(
+    portfolio_id: UUID,
+    manifest_digest: str,
+    symbol: str,
+    current_quantity: Decimal = Decimal("0"),
+    shortage_quantity: Decimal = Decimal("0"),
+) -> str:
     normalized = symbol.lower().replace("/", "-")
-    return f"tlh-seed-{portfolio_id.hex[:16]}-{manifest_digest[:16]}-{normalized}"[:128]
+    snapshot = hashlib.sha256(
+        f"{manifest_digest}|{normalized}|{current_quantity}|{shortage_quantity}".encode()
+    ).hexdigest()[:16]
+    return f"tlh-seed-{portfolio_id.hex[:16]}-{snapshot}-{normalized}"[:128]
 
 
 def _load_manifest(path: Path) -> tuple[dict, str]:
@@ -40,6 +52,7 @@ async def seed_alpaca_paper(
     portfolio: str,
     manifest_path: Path,
     confirm_paper: bool,
+    asset_class_filter: str | None = None,
     settings: Settings | None = None,
     execution: ExecutionProvider | None = None,
 ) -> list[dict]:
@@ -93,14 +106,24 @@ async def seed_alpaca_paper(
             current_quantity = current_positions.get(symbol.upper(), Decimal("0"))
             shortage = max(quantity - current_quantity, Decimal("0"))
             asset_class = expected_alpaca_asset_class(str(position.get("asset_class") or ""))
+            if asset_class_filter is not None and asset_class != asset_class_filter:
+                continue
+            planned_buy = shortage
+            if shortage > 0 and asset_class == "crypto":
+                # Alpaca paper crypto fills observed in the demo deduct quantity for fees.
+                # A small, explicit execution-only buffer prevents the mirror from
+                # remaining below the manifest sale quantity. It never changes tax lots.
+                planned_buy = shortage * (Decimal("1") + CRYPTO_SEED_BUFFER_BPS / _BPS)
             item = {
                 "symbol": symbol,
                 "manifest_quantity": quantity,
                 "current_quantity": current_quantity,
-                "quantity": shortage,
+                "shortage_quantity": shortage,
+                "quantity": planned_buy,
+                "buffer_bps": CRYPTO_SEED_BUFFER_BPS if asset_class == "crypto" and shortage > 0 else Decimal("0"),
                 "asset_class": asset_class,
                 "time_in_force": "GTC" if asset_class == "crypto" else "DAY",
-                "client_order_id": seed_client_order_id(account.id, manifest_digest, symbol),
+                "client_order_id": seed_client_order_id(account.id, manifest_digest, symbol, current_quantity, shortage),
             }
             if shortage == 0:
                 sufficient.append(item)
@@ -112,7 +135,9 @@ async def seed_alpaca_paper(
                 **item,
                 "manifest_quantity": str(item["manifest_quantity"]),
                 "current_quantity": str(item["current_quantity"]),
+                "shortage_quantity": str(item["shortage_quantity"]),
                 "quantity": str(item["quantity"]),
+                "buffer_bps": str(item["buffer_bps"]),
             }
 
         print(json.dumps([serialized(item) for item in [*planned, *sufficient]], indent=2))
@@ -190,12 +215,18 @@ def main() -> None:
         action="store_true",
         help="submit the displayed BUY plan to Alpaca paper; without this flag the command is preview-only",
     )
+    parser.add_argument(
+        "--asset-class",
+        choices=("us_equity", "crypto"),
+        help="limit the preview or submission to one Alpaca asset class",
+    )
     args = parser.parse_args()
     results = asyncio.run(
         seed_alpaca_paper(
             portfolio=args.portfolio,
             manifest_path=args.manifest,
             confirm_paper=args.confirm_paper,
+            asset_class_filter=args.asset_class,
         )
     )
     print(json.dumps(results, indent=2, default=str))

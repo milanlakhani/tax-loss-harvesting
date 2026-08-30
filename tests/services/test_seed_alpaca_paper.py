@@ -77,6 +77,36 @@ async def test_preview_prints_plan_without_submission_or_enable_flag(settings, s
 
 
 @pytest.mark.asyncio
+async def test_asset_class_filter_excludes_crypto_from_preview_and_submission(settings, session):
+    await _account(session)
+    settings.enable_paper_orders = True
+    manifest = _manifest(settings.local_data_dir / "manifest.json")
+    execution = FakeExecutionProvider()
+
+    preview = await seed_alpaca_paper(
+        portfolio="conservative-demo",
+        manifest_path=manifest,
+        confirm_paper=False,
+        asset_class_filter="us_equity",
+        settings=settings,
+        execution=execution,
+    )
+    assert [row["symbol"] for row in preview] == ["VTI"]
+    assert execution.submit_calls == []
+
+    results = await seed_alpaca_paper(
+        portfolio="conservative-demo",
+        manifest_path=manifest,
+        confirm_paper=True,
+        asset_class_filter="us_equity",
+        settings=settings,
+        execution=execution,
+    )
+    assert [row["symbol"] for row in results] == ["VTI"]
+    assert [call["symbol"] for call in execution.submit_calls] == ["VTI"]
+
+
+@pytest.mark.asyncio
 async def test_seeds_manifest_quantities_with_tif_and_activity(settings, session):
     await _account(session)
     settings.enable_paper_orders = True
@@ -92,7 +122,7 @@ async def test_seeds_manifest_quantities_with_tif_and_activity(settings, session
     )
 
     assert [call["symbol"] for call in execution.submit_calls] == ["VTI", "BTC/USD"]
-    assert [call["quantity"] for call in execution.submit_calls] == [Decimal("12"), Decimal("0.07")]
+    assert [call["quantity"] for call in execution.submit_calls] == [Decimal("12"), Decimal("0.07035")]
     assert results[0]["time_in_force"] == "DAY"
     assert results[1]["time_in_force"] == "GTC"
     activities = list(await session.scalars(select(PaperMirrorActivity)))
@@ -136,6 +166,7 @@ async def test_preview_and_submission_buy_only_missing_quantity(settings, sessio
     assert preview[0]["symbol"] == "VTI"
     assert preview[0]["manifest_quantity"] == "12"
     assert preview[0]["current_quantity"] == "5"
+    assert preview[0]["shortage_quantity"] == "7"
     assert preview[0]["quantity"] == "7"
     assert preview[0]["status"] == "PREVIEW_ONLY"
     assert preview[1]["symbol"] == "BTC/USD"
@@ -153,6 +184,46 @@ async def test_preview_and_submission_buy_only_missing_quantity(settings, sessio
     assert execution.submit_calls[0]["symbol"] == "VTI"
     assert execution.submit_calls[0]["quantity"] == Decimal("7")
     assert {row["status"] for row in results} == {"SUBMITTED", "ALREADY_SUFFICIENT"}
+
+
+@pytest.mark.asyncio
+async def test_crypto_shortage_uses_execution_buffer_and_snapshot_id(settings, session):
+    await _account(session)
+    manifest = _manifest(settings.local_data_dir / "manifest.json")
+    execution = FakeExecutionProvider()
+    execution.seed_position(
+        ExecutionPosition(
+            account_alias="conservative-demo",
+            symbol="BTC/USD",
+            quantity=Decimal("0.069825"),
+            tradable=True,
+            asset_class="crypto",
+        )
+    )
+
+    preview = await seed_alpaca_paper(
+        portfolio="conservative-demo",
+        manifest_path=manifest,
+        confirm_paper=False,
+        settings=settings,
+        execution=execution,
+    )
+    btc = next(row for row in preview if row["symbol"] == "BTC/USD")
+    assert btc["shortage_quantity"] == "0.000175"
+    assert btc["quantity"] == "0.000175875"
+    assert btc["buffer_bps"] == "50"
+    assert btc["status"] == "PREVIEW_ONLY"
+
+    execution.positions[("conservative-demo", "BTC/USD")].quantity = Decimal("0.0699")
+    changed = await seed_alpaca_paper(
+        portfolio="conservative-demo",
+        manifest_path=manifest,
+        confirm_paper=False,
+        settings=settings,
+        execution=execution,
+    )
+    changed_btc = next(row for row in changed if row["symbol"] == "BTC/USD")
+    assert changed_btc["client_order_id"] != btc["client_order_id"]
 
 
 @pytest.mark.asyncio

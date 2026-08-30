@@ -70,9 +70,14 @@ def _inject_style() -> None:
         .status-card--success::after {background:rgba(10,155,143,.10);}
         .status-card--warning::before {background:#e39a26;}
         .status-card--warning::after {background:rgba(227,154,38,.12);}
-        .status-card__label {color:#617086;font-size:.9rem;font-weight:650;margin-bottom:1rem;}
-        .status-card__value {color:#202c3e;font-size:clamp(1.65rem,2.6vw,2.35rem);font-weight:650;line-height:1.08;letter-spacing:-.025em;}
-        .status-card__meta {color:#78869a;font-size:.78rem;margin-top:.65rem;}
+        .status-card__label {position:relative;z-index:1;color:#617086;font-size:.9rem;font-weight:650;margin-bottom:1rem;}
+        .status-card__value {
+            position:relative;z-index:1;min-width:0;max-width:100%;color:#202c3e;
+            min-height:4.25rem;font-size:clamp(1.55rem,2vw,1.85rem);font-weight:650;
+            line-height:1.15;letter-spacing:-.015em;white-space:normal;
+            word-break:normal;overflow-wrap:normal;
+        }
+        .status-card__meta {position:relative;z-index:1;color:#78869a;font-size:.78rem;margin-top:.65rem;}
         div[data-testid="stMetric"] {
             background:rgba(255,255,255,.96);border:1px solid #d8e3f2;
             padding:1.05rem 1.15rem;border-radius:18px;
@@ -240,10 +245,11 @@ def _status_cards(cards: list[dict]) -> None:
     for card in cards:
         variant = card.get("variant") if card.get("variant") in {"success", "warning"} else ""
         variant_class = f" status-card--{variant}" if variant else ""
+        display_value = str(card.get("value") if card.get("value") is not None else "—")
         blocks.append(
             f'''<div class="status-card{variant_class}" title="{escape(str(card.get('title') or card.get('meta') or 'Summary'))}">
               <div class="status-card__label">{escape(str(card.get('label') or 'Summary'))}</div>
-              <div class="status-card__value">{escape(str(card.get('value') if card.get('value') is not None else '—'))}</div>
+              <div class="status-card__value">{escape(display_value)}</div>
               <div class="status-card__meta">{escape(str(card.get('meta') or 'Current persisted value'))}</div>
             </div>'''
         )
