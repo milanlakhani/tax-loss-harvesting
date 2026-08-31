@@ -64,6 +64,22 @@ class Settings(BaseSettings):
     paper_prep_ttl_seconds: int = 300
     backend_public_url: str = "http://localhost:8000"
     demo_session_signing_secret: str = "change-me"
+    whatsapp_phone_number: str | None = None
+    whatsapp_phone_number_id: str | None = None
+    whatsapp_access_token: str | None = None
+    whatsapp_verify_token: str | None = None
+    whatsapp_app_secret: str | None = None
+    whatsapp_allowed_senders: str = ""
+    whatsapp_default_user_id: str = "11111111-1111-4111-8111-111111111111"
+    whatsapp_graph_api_version: str = "v23.0"
+    whatsapp_graph_api_base_url: str = "https://graph.facebook.com"
+
+    def whatsapp_sender_allowlist(self) -> set[str]:
+        return {
+            "".join(character for character in value if character.isdigit())
+            for value in self.whatsapp_allowed_senders.split(",")
+            if value.strip()
+        }
 
     @property
     def is_local(self) -> bool:

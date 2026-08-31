@@ -3,6 +3,8 @@
 Deterministic local core (Phase 1) plus live provider adapters, FastMCP, OpenAI Agents SDK
 orchestration, Streamlit, Alpaca paper synchronization, and guarded paper-order execution.
 
+For the optional read-only WhatsApp demonstration, see [the no-extra-cost setup guide](docs/whatsapp-no-cost-setup.md).
+
 Financial logic lives only in application services. Agents, MCP handlers, API routes, Streamlit,
 and provider adapters do not reimplement harvesting, wash-sale, risk, or evaluation rules.
 

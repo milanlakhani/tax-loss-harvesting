@@ -70,7 +70,7 @@ def test_current_demo_brokerage_offsets_reinvest_and_realized():
     crypto_day = as_of + timedelta(days=CRYPTO_SCHEDULED_BUY_OFFSET_DAYS)
     for spec, wash_symbol in ((portfolio_a_spec(as_of=as_of), "SPY"), (portfolio_b_spec(as_of=as_of), "VNQ")):
         assert spec.period_end == as_of
-        assert spec.statement_id.endswith(as_of.strftime("%Y-%m"))
+        assert spec.statement_id.endswith(as_of.isoformat())
         assert spec.statement_id != "BRK-A-2024-06"
         parsed = parse_brokerage_pdf(render_brokerage_pdf(spec))
         assert parsed.period_end.date() == as_of
@@ -100,3 +100,13 @@ def test_write_current_demo_pdfs_does_not_reuse_2024_filenames(tmp_path, setting
     assert "BRK-A-2024-06.pdf" not in names
     assert "BANK-0-2024-02-01.pdf" not in names
     assert any(name.startswith("BRK-A-2026-08") for name in names)
+
+
+@pytest.mark.parser
+def test_current_demo_brokerage_identity_changes_each_day():
+    first = portfolio_a_spec(as_of=date(2026, 8, 29))
+    refreshed = portfolio_a_spec(as_of=date(2026, 8, 31))
+
+    assert first.statement_id == "BRK-A-2026-08-29"
+    assert refreshed.statement_id == "BRK-A-2026-08-31"
+    assert first.statement_id != refreshed.statement_id

@@ -54,5 +54,13 @@ services:
       --server.port 8501
       --server.headless true
 
+  whatsapp-tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["whatsapp"]
+    depends_on:
+      - backend
+    command: tunnel --no-autoupdate --url http://backend:8000
+    restart: unless-stopped
+
 volumes:
   pgdata:

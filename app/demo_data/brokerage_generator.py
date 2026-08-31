@@ -244,7 +244,10 @@ def _current_demo_spec(
     purchases = [replace(purchase, event_date=shift_from_historical(purchase.event_date, as_of)) for purchase in purchases]
     dividends, purchases = _apply_current_demo_window_dates(as_of, dividends, purchases, wash_symbol=wash_symbol)
     return _assemble_spec(
-        statement_id=f"BRK-{prefix}-{as_of.strftime('%Y-%m')}",
+        # Current-demo snapshots can be refreshed more than once in a month.
+        # Include the day so a newer snapshot is not mistaken for an older
+        # statement by the ingestion idempotency guard.
+        statement_id=f"BRK-{prefix}-{as_of.isoformat()}",
         account_id=account_id,
         user_id=user_id,
         period_start=shift_from_historical(date(2024, 1, 1), as_of),

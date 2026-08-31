@@ -3,10 +3,13 @@ from __future__ import annotations
 import os
 import re
 import secrets
+from io import BytesIO
 from html import escape
+from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
+import qrcode
 import streamlit as st
 
 from app.ui.confirm_state import confirm_button_enabled
@@ -14,6 +17,21 @@ from app.ui.confirm_state import confirm_button_enabled
 BACKEND = os.environ.get("BACKEND_URL", "http://localhost:8000")
 PAPER_BANNER = "SIMULATED PAPER TRADE - NO REAL MONEY"
 DEFAULT_USER = "11111111-1111-4111-8111-111111111111"
+
+
+def _whatsapp_link(phone_number: str, message: str) -> str:
+    """Build a safe click-to-chat URL without placing credentials in the QR."""
+    digits = re.sub(r"\D", "", phone_number)
+    if not digits:
+        return ""
+    return f"https://wa.me/{digits}?text={quote(message.strip())}"
+
+
+def _whatsapp_qr(link: str) -> bytes:
+    image = qrcode.make(link)
+    output = BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
 
 
 def _inject_style() -> None:
@@ -54,6 +72,16 @@ def _inject_style() -> None:
         .status-pill {display:inline-block;padding:.28rem .62rem;border-radius:999px;background:#dff8ef;color:#08715c;font-weight:700;font-size:.78rem;margin:.2rem .2rem .2rem 0;}
         .soft-card {background:rgba(255,255,255,.88);border:1px solid #dfe8f6;border-radius:16px;padding:1rem 1.15rem;box-shadow:0 8px 24px rgba(28,55,90,.06);margin:.45rem 0 1rem;}
         .section-note {color:#5f6f85;font-size:.92rem;}
+        .integration-card {
+            padding:1.3rem 1.4rem;border-radius:20px;background:rgba(255,255,255,.96);
+            border:1px solid #d8e3f2;box-shadow:0 10px 28px rgba(28,55,90,.075);
+        }
+        .integration-card h3 {margin:.1rem 0 .45rem;color:#202c3e;}
+        .integration-card p {margin:.2rem 0;color:#617086;}
+        .integration-badge {
+            display:inline-block;margin-bottom:.7rem;padding:.3rem .65rem;border-radius:999px;
+            background:#dcf8e8;color:#08715c;font-size:.76rem;font-weight:750;
+        }
         .status-grid {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1.25rem;margin:1.15rem 0 1.35rem;}
         .status-grid--2 {grid-template-columns:repeat(2,minmax(0,1fr));}
         .status-grid--4 {grid-template-columns:repeat(4,minmax(0,1fr));}
@@ -451,6 +479,7 @@ def main() -> None:
             "Tax-loss candidates",
             "Evaluation details",
             "Paper orders",
+            "WhatsApp integration",
         ],
     )
     st.sidebar.markdown("---")
@@ -763,6 +792,149 @@ def main() -> None:
         last = st.session_state.get("last_order")
         if last and st.button("Refresh paper-order status"):
             st.write(_post(f"/api/paper-orders/{last['order_id']}/refresh"))
+    elif page == "WhatsApp integration":
+        st.header("WhatsApp integration")
+        st.caption("Connect a read-only WhatsApp channel for authoritative portfolio, risk, drift and safely evaluated tax-loss information.")
+        configured_phone = os.environ.get("WHATSAPP_PHONE_NUMBER", "").strip()
+        default_message = os.environ.get(
+            "WHATSAPP_DEFAULT_MESSAGE",
+            "Hello Northstar, show my portfolio summary.",
+        )
+        webhook_configured = all(
+            os.environ.get(name, "").strip()
+            for name in (
+                "WHATSAPP_PHONE_NUMBER_ID",
+                "WHATSAPP_ACCESS_TOKEN",
+                "WHATSAPP_VERIFY_TOKEN",
+                "WHATSAPP_APP_SECRET",
+                "WHATSAPP_ALLOWED_SENDERS",
+            )
+        )
+        connect_tab, portfolio_tab, recommendations_tab = st.tabs(
+            ["Connect WhatsApp", "Portfolio", "Recommendations"]
+        )
+        with connect_tab:
+            details, qr_column = st.columns([1.45, 1], gap="large")
+            with details:
+                st.markdown(
+                    '''<div class="integration-card">
+                    <span class="integration-badge">READ-ONLY CHANNEL</span>
+                    <h3>Northstar on WhatsApp</h3>
+                    <p>Ask for portfolio holdings, allocation drift, risk limits, spending signals, or tax-loss opportunities approved by deterministic safety controls.</p>
+                    </div>''',
+                    unsafe_allow_html=True,
+                )
+                _status_cards([
+                    {"label": "QR link", "value": "Ready" if configured_phone else "Setup", "meta": "Click-to-chat access", "variant": "success" if configured_phone else "warning"},
+                    {"label": "Bot webhook", "value": "Connected" if webhook_configured else "Pending", "meta": "Automatic question responses", "variant": "success" if webhook_configured else "warning"},
+                ])
+                st.markdown("#### Connection checklist")
+                st.markdown(
+                    "1. Enter the Meta business or test number below.\n"
+                    "2. Scan the generated QR with your phone camera.\n"
+                    "3. Configure Meta's callback to `/api/whatsapp/webhook`.\n"
+                    "4. Add your personal number to `WHATSAPP_ALLOWED_SENDERS`."
+                )
+            with qr_column:
+                phone_number = st.text_input(
+                    "Meta business/test number",
+                    value=configured_phone,
+                    placeholder="447700900123",
+                    help="Digits only, including country code. Use the number provided by Meta—not your password.",
+                )
+                starter = st.selectbox(
+                    "Starter question",
+                    [
+                        default_message,
+                        "Hello Northstar, is my portfolio within its risk limits?",
+                        "Hello Northstar, show my allocation drift.",
+                        "Hello Northstar, show my safe tax-loss opportunities.",
+                    ],
+                )
+                link = _whatsapp_link(phone_number, starter)
+                if link:
+                    st.image(_whatsapp_qr(link), caption="Scan with your phone camera", width=260)
+                    st.link_button("Open WhatsApp", link, use_container_width=True)
+                    digits = re.sub(r"\D", "", phone_number)
+                    st.caption(f"Business/test number: +{'•' * max(len(digits) - 4, 0)}{digits[-4:]}")
+                    if not webhook_configured:
+                        st.warning("The QR opens WhatsApp now, but automatic bot replies require the Meta webhook credentials listed below.")
+                else:
+                    st.info("Enter the Meta business/test number to generate the scannable QR code.")
+            st.info("Safety boundary: WhatsApp cannot prepare, approve, confirm, buy, sell, or submit an order.")
+            with st.expander("Meta configuration fields"):
+                st.code(
+                    "WHATSAPP_PHONE_NUMBER=\n"
+                    "WHATSAPP_PHONE_NUMBER_ID=\n"
+                    "WHATSAPP_ACCESS_TOKEN=\n"
+                    "WHATSAPP_VERIFY_TOKEN=\n"
+                    "WHATSAPP_APP_SECRET=\n"
+                    "WHATSAPP_ALLOWED_SENDERS=",
+                    language="text",
+                )
+                st.caption("Never paste access tokens into the QR field or commit them to Git.")
+        with portfolio_tab:
+            st.subheader("Portfolio available to WhatsApp")
+            st.caption("Preview the authoritative data that the WhatsApp assistant is allowed to explain.")
+            holdings = (_get("/api/holdings") or {}).get("holdings", [])
+            accounts = sorted({str(item.get("account") or "Unknown") for item in holdings})
+            asset_types = sorted({_friendly_code(item.get("asset_type")) for item in holdings})
+            filter_columns = st.columns([1, 1, 1.2])
+            account_filter = filter_columns[0].selectbox("Account", ["All accounts", *accounts])
+            type_filter = filter_columns[1].multiselect("Asset type", asset_types, default=asset_types)
+            symbol_filter = filter_columns[2].text_input("Find symbol", placeholder="e.g. VTI")
+            visible_holdings = [
+                item for item in holdings
+                if (account_filter == "All accounts" or item.get("account") == account_filter)
+                and _friendly_code(item.get("asset_type")) in type_filter
+                and (not symbol_filter or symbol_filter.lower() in str(item.get("symbol") or "").lower())
+            ]
+            _status_cards([
+                {"label": "Visible positions", "value": len(visible_holdings), "meta": "After selected filters"},
+                {"label": "Accounts", "value": len({item.get('account') for item in visible_holdings}), "meta": "Authoritative portfolio scope"},
+                {"label": "Channel access", "value": "Explain only", "meta": "No portfolio mutation", "variant": "success"},
+            ])
+            st.dataframe(
+                [{"Symbol": item.get("symbol"), "Name": item.get("name"), "Type": _friendly_code(item.get("asset_type")), "Quantity": item.get("quantity"), "Account": item.get("account")} for item in visible_holdings],
+                use_container_width=True,
+                hide_index=True,
+            )
+        with recommendations_tab:
+            st.subheader("Recommendations available to WhatsApp")
+            st.caption("These are tax-loss decisions—not unrestricted predictions of which investment will perform best.")
+            approved = st.session_state.get("approved_candidates") or []
+            protected = st.session_state.get("rejected_candidates") or []
+            rows = [*approved, *protected]
+            decision_filter = st.segmented_control(
+                "Decision",
+                ["All", "Approved", "Protected"],
+                default="All",
+            )
+            controls = sorted({_friendly_code(item.get("rejection_code")) for item in protected if item.get("rejection_code")})
+            control_filter = st.multiselect("Safety control", controls, default=controls)
+            filtered = []
+            for item in rows:
+                is_approved = item.get("status") == "APPROVED"
+                if decision_filter == "Approved" and not is_approved:
+                    continue
+                if decision_filter == "Protected" and is_approved:
+                    continue
+                if not is_approved and controls and _friendly_code(item.get("rejection_code")) not in control_filter:
+                    continue
+                filtered.append(item)
+            _status_cards([
+                {"label": "Approved", "value": len(approved), "meta": "Passed every hard gate", "variant": "success" if approved else ""},
+                {"label": "Protected", "value": len(protected), "meta": "Blocked by safety controls", "variant": "warning" if protected else "success"},
+                {"label": "Policy", "value": "Fail closed", "meta": "No speculative best-investment ranking", "variant": "success"},
+            ])
+            if filtered:
+                st.dataframe(
+                    [{"Symbol": item.get("symbol"), "Decision": _friendly_code(item.get("status")), "Safety control": _friendly_code(item.get("rejection_code")) if item.get("rejection_code") else "Passed all gates", "Explanation": item.get("explanation"), "Rank": item.get("rank")} for item in filtered],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.info("Run Portfolio analysis to populate persisted recommendation decisions.")
 
 
 if __name__ == "__main__":

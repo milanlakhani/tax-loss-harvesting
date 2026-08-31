@@ -9,6 +9,7 @@ from app.api.health import router as health_router
 from app.api.orders import router as orders_router
 from app.api.sessions import router as sessions_router
 from app.api.statements import router as statements_router
+from app.api.whatsapp import router as whatsapp_router
 from app.container import AppContainer, build_container
 from app.mcp.server import build_mcp
 
@@ -34,6 +35,7 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
     application.include_router(analysis_router)
     application.include_router(orders_router)
     application.include_router(sessions_router)
+    application.include_router(whatsapp_router)
     application.mount("/mcp", mcp_app)
     return application
 

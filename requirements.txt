@@ -21,3 +21,4 @@ alpaca-py==0.40.1
 boto3==1.36.16
 respx==0.22.0
 python-multipart==0.0.20
+qrcode[pil]==8.2
