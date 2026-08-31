@@ -776,8 +776,17 @@ def main() -> None:
             }
             candidate_id = choices[st.selectbox("Approved opportunity", list(choices))]
         else:
-            st.info("Run Portfolio analysis first. Only opportunities that pass every safety rule can be prepared.")
-        if st.button("Prepare paper order", type="primary", disabled=not candidate_id) and candidate_id:
+            st.info(
+                "No approved opportunity is available. Run Portfolio analysis during the live market window; "
+                "only candidates that pass every safety rule can be prepared."
+            )
+        prepare_label = "Prepare paper order" if candidate_id else "No approved opportunity available"
+        if st.button(
+            prepare_label,
+            type="primary",
+            disabled=not candidate_id,
+            help=None if candidate_id else "A persisted APPROVED candidate is required before preparation.",
+        ) and candidate_id:
             prepared = _post(f"/api/candidates/{candidate_id}/prepare")
             if prepared:
                 st.session_state.prepared_snapshot = prepared

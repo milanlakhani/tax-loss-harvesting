@@ -57,3 +57,18 @@ def test_confirm_paper_sale_button_enforces_checkbox_and_guards():
     at2.run()
     confirm2 = next(b for b in at2.button if b.label == "Confirm paper sale")
     assert confirm2.disabled is True
+
+
+@pytest.mark.unit
+def test_prepare_button_is_clearly_disabled_without_approved_candidate():
+    at = AppTest.from_file("app/ui/streamlit_app.py")
+    at.session_state["demo_session_token"] = "test-demo-session"
+    at.session_state["orchestrator_session_id"] = "already-resumed"
+    at.session_state["approved_candidates"] = []
+    at.run()
+    at.sidebar.radio[0].set_value("Paper orders")
+    at.run()
+
+    prepare = next(b for b in at.button if b.label == "No approved opportunity available")
+    assert prepare.disabled is True
+    assert any("No approved opportunity is available" in message.value for message in at.info)
