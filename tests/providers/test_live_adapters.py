@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -11,6 +11,7 @@ import respx
 from app.adapters.memory_window_store import InMemoryRollingWindowStore
 from app.providers.alpha_vantage import AlphaVantageProvider
 from app.providers.alpaca import ALPACA_PAPER_FORCED, AlpacaProvider
+from app.providers.alpaca_market_data import AlpacaMarketDataProvider
 from app.providers.coingecko import CoinGeckoProvider
 from app.providers.fakes import FakeCryptoQuoteProvider, FakeEquityQuoteProvider, FakeExecutionProvider, FakeFxProvider, RecordingClock
 from app.providers.frankfurter import FrankfurterProvider
@@ -155,3 +156,37 @@ async def test_alpaca_normalizes_crypto_position_symbols_at_provider_boundary():
         ("BTC/USD", "crypto"),
         ("QQQ", "us_equity"),
     ]
+
+
+@pytest.mark.unit
+async def test_alpaca_market_data_preserves_trade_timestamp_and_delegates_history():
+    source_time = datetime(2026, 8, 31, 14, 35, tzinfo=UTC)
+    history = MagicMock()
+    history.get_price_history = AsyncMock(return_value=[])
+    with patch("app.providers.alpaca_market_data.StockHistoricalDataClient") as client_type:
+        client_type.return_value.get_stock_latest_trade.return_value = {
+            "QQQ": MagicMock(price=401.25, timestamp=source_time)
+        }
+        provider = AlpacaMarketDataProvider("key", "secret", history=history)
+        quote = await provider.get_quote("ETF:QQQ", "QQQ", source_time)
+        observations = await provider.get_price_history("ETF:QQQ", "QQQ", source_time, source_time)
+
+    assert quote is not None
+    assert quote.price == Decimal("401.25")
+    assert quote.source_timestamp == source_time
+    assert quote.provider == "alpaca-market-data"
+    assert quote.retrieved_at != quote.source_timestamp
+    assert observations == []
+    history.get_price_history.assert_awaited_once_with("ETF:QQQ", "QQQ", source_time, source_time)
+
+
+@pytest.mark.unit
+async def test_alpaca_market_data_fails_closed_when_latest_trade_is_missing():
+    history = MagicMock()
+    with patch("app.providers.alpaca_market_data.StockHistoricalDataClient") as client_type:
+        client_type.return_value.get_stock_latest_trade.return_value = {}
+        provider = AlpacaMarketDataProvider("key", "secret", history=history)
+        from app.domain.errors import ProviderError
+
+        with pytest.raises(ProviderError, match="latest trade unavailable"):
+            await provider.get_quote("ETF:QQQ", "QQQ", datetime(2026, 8, 31, tzinfo=UTC))

@@ -7,6 +7,7 @@ from app.adapters.postgres_window_store import PostgresRollingWindowStore
 from app.config import Settings
 from app.demo_data.generate import build_fake_providers
 from app.providers.alpaca import AlpacaProvider
+from app.providers.alpaca_market_data import AlpacaMarketDataProvider
 from app.providers.alpha_vantage import AlphaVantageProvider
 from app.providers.coingecko import CoinGeckoProvider
 from app.providers.frankfurter import FrankfurterProvider
@@ -38,8 +39,11 @@ def build_live_providers(settings: Settings, windows=None) -> ProviderRouter:
         base_url=settings.coingecko_api_base_url,
     )
     fx = FrankfurterProvider(HttpJsonClient(client, provider="frankfurter"), windows=windows)
-    execution = AlpacaProvider(settings.alpaca_credentials(), enable_paper_orders=settings.enable_paper_orders)
-    return ProviderRouter(equity=av, crypto=cg, fx=fx, execution=execution)
+    accounts = settings.alpaca_credentials()
+    execution = AlpacaProvider(accounts, enable_paper_orders=settings.enable_paper_orders)
+    market_key, market_secret = next(iter(accounts.values()))
+    equity = AlpacaMarketDataProvider(market_key, market_secret, history=av)
+    return ProviderRouter(equity=equity, crypto=cg, fx=fx, execution=execution)
 
 
 def build_providers(settings: Settings, as_of, windows=None) -> ProviderRouter:
