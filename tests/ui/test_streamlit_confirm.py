@@ -71,4 +71,4 @@ def test_prepare_button_is_clearly_disabled_without_approved_candidate():
 
     prepare = next(b for b in at.button if b.label == "Prepare paper order")
     assert prepare.disabled is True
-    assert any("No approved opportunity is available" in message.value for message in at.info)
+    assert any("Run Portfolio analysis first" in message.value for message in at.info)

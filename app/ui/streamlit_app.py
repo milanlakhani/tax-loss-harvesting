@@ -776,10 +776,7 @@ def main() -> None:
             }
             candidate_id = choices[st.selectbox("Approved opportunity", list(choices))]
         else:
-            st.info(
-                "No approved opportunity is available. Run Portfolio analysis during the live market window; "
-                "only candidates that pass every safety rule can be prepared."
-            )
+            st.info("Run Portfolio analysis first. Only opportunities that pass every safety rule can be prepared.")
         if st.button(
             "Prepare paper order",
             type="primary",
