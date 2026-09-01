@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Northstar Wealth Copilot — Detailed Architecture</title>
+<style>
+@page { size: A4; margin: 17mm 16mm 18mm; }
+* { box-sizing: border-box; }
+body { margin:0; color:#16243a; font:10.2pt/1.48 "Segoe UI",Arial,sans-serif; background:#fff; }
+h1,h2,h3 { color:#102746; margin:0 0 8px; page-break-after:avoid; }
+h1 { font-size:29pt; line-height:1.08; } h2 { font-size:19pt; border-bottom:2px solid #18a7a0; padding-bottom:5px; margin-top:22px; }
+h3 { font-size:13pt; margin-top:15px; } p { margin:5px 0 9px; } ul,ol { margin:5px 0 10px 21px; padding:0; }
+li { margin:3px 0; } code { color:#0a5c68; font:9pt Consolas,monospace; background:#eef6f7; padding:1px 3px; }
+.cover { min-height:245mm; padding:26mm 14mm; background:linear-gradient(145deg,#07162c 0%,#10395a 55%,#109b94 100%); color:#fff; page-break-after:always; }
+.cover h1 { color:#fff; max-width:620px; margin-top:28mm; }.cover h2 { color:#b9fff7; border:0; font-size:16pt; }.cover p { color:#dcecff; font-size:12pt; max-width:570px; }
+.badge { display:inline-block; padding:5px 11px; border-radius:18px; background:#d9fff4; color:#076857; font-weight:700; font-size:8.5pt; letter-spacing:.4px; }
+.meta { margin-top:35mm; border-top:1px solid rgba(255,255,255,.35); padding-top:12px; font-size:10pt; }
+.page-break { page-break-before:always; }.avoid { page-break-inside:avoid; }
+.callout { border-left:5px solid #10a69e; background:#edf9f8; padding:10px 13px; margin:10px 0; border-radius:4px; }
+.warn { border-color:#e99b18; background:#fff7e6; }.danger { border-color:#d34a55; background:#fff0f1; }
+.grid { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin:10px 0; }
+.card { border:1px solid #cbd9e8; border-radius:8px; padding:10px 12px; background:#f9fbfe; page-break-inside:avoid; }
+.card h3 { margin-top:0; color:#0b6c70; }.status { font-size:8pt; font-weight:700; color:#087662; text-transform:uppercase; }
+.planned { color:#a36900; }.optional { color:#7050a0; }
+table { width:100%; border-collapse:collapse; margin:9px 0 14px; font-size:8.8pt; page-break-inside:auto; }
+tr { page-break-inside:avoid; } th { background:#123958; color:#fff; text-align:left; padding:6px; }
+td { border:1px solid #ccd8e5; padding:6px; vertical-align:top; } tr:nth-child(even) td { background:#f5f8fc; }
+.diagram { border:1px solid #bfcfe0; border-radius:9px; padding:13px; background:#f7fbff; text-align:center; margin:12px 0; page-break-inside:avoid; }
+.row { display:flex; align-items:stretch; justify-content:center; gap:7px; margin:6px 0; }
+.box { flex:1; border:2px solid #2c7690; background:#fff; border-radius:7px; padding:8px 6px; font-weight:650; min-width:0; }
+.box.teal { border-color:#0b9b91; }.box.gold { border-color:#db971d; }.box.red { border-color:#c94b58; }.box.dark { background:#102746; color:#fff; }
+.arrow { color:#168b8b; font-size:15pt; font-weight:bold; align-self:center; }.small { font-size:8.5pt; color:#65758c; font-weight:400; }
+.flow { display:grid; grid-template-columns:28px 1fr; gap:7px 9px; margin:10px 0; }.num { width:25px;height:25px;border-radius:50%;background:#0d918b;color:#fff;text-align:center;line-height:25px;font-weight:700; }
+.toc a { color:#124f70; text-decoration:none; }.footer-note { color:#68778a; font-size:8.5pt; }
+</style>
+</head>
+<body>
+<section class="cover">
+  <span class="badge">DETAILED TECHNICAL ARCHITECTURE</span>
+  <h1>Northstar Wealth Copilot</h1>
+  <h2>Personal Finance &amp; Tax-Loss Harvesting Demonstration</h2>
+  <p>A safety-first, multi-agent application for statement ingestion, spending intelligence, portfolio drift analysis and guarded Alpaca paper trading.</p>
+  <div class="meta"><b>Architecture baseline:</b> Phase 2 local implementation<br><b>Document date:</b> 1 September 2026<br><b>Branch:</b> nidhi<br><b>Important:</b> Educational demonstration; simulated paper trading only; not tax or investment advice.</div>
+</section>
+
+<h2>1. Executive summary</h2>
+<p>Northstar ingests synthetic bank and brokerage statements, maintains a relational financial ledger, enriches assets with provider data, detects unusual spending and portfolio drift, generates tax-loss candidates, and subjects every candidate to deterministic safety gates. Only persisted final decisions are shown to users. A paper order can be submitted only through a separate, explicit, human-confirmed workflow.</p>
+<div class="callout"><b>Primary design principle:</b> the LLM may route and explain, but it cannot calculate authoritative financial facts, approve a candidate, bypass a hard gate, or submit an order.</div>
+<div class="grid">
+ <div class="card"><span class="status">Implemented</span><h3>Deterministic core</h3><p>Parsing, anomaly features, portfolio mathematics, harvesting, wash-sale checks, risk controls, ranking and persistence.</p></div>
+ <div class="card"><span class="status">Implemented</span><h3>Application surfaces</h3><p>Streamlit UI, FastAPI REST endpoints, embedded FastMCP server, CLI jobs and provider-verification commands.</p></div>
+ <div class="card"><span class="status">Implemented</span><h3>External integrations</h3><p>Alpha Vantage, CoinGecko, Frankfurter, OpenAI and two Alpaca paper-account aliases.</p></div>
+ <div class="card"><span class="status planned">Planned</span><h3>AWS deployment</h3><p>RDS/Postgres, DynamoDB rolling windows, S3 statement storage and protected container hosting. No scheduler is required for the submitted scope.</p></div>
+</div>
+
+<h2>2. Problem-to-capability mapping</h2>
+<table><tr><th>Problem requirement</th><th>Architecture response</th><th>Status</th></tr>
+<tr><td>Ingest bank/brokerage PDFs</td><td>PyMuPDF deterministic parsers, validation, duplicate detection and persisted statements/transactions/tax lots.</td><td>Implemented locally</td></tr>
+<tr><td>Use live market data</td><td>Provider router: equities/ETFs, crypto and FX adapters with normalized identifiers, timestamps and freshness checks.</td><td>Implemented; credential/rate dependent</td></tr>
+<tr><td>Detect abnormal spending</td><td>Persisted feature pipeline and seeded IsolationForest with minimum-history controls.</td><td>Implemented</td></tr>
+<tr><td>Measure portfolio drift</td><td>Current weights compared with persisted target allocations and risk profiles.</td><td>Implemented</td></tr>
+<tr><td>Propose safe harvesting trades</td><td>Candidate generation followed by independent deterministic evaluation; rejected candidates remain auditable.</td><td>Implemented</td></tr>
+<tr><td>Prevent wash-sale/risk violations</td><td>Fail-closed hard gates run during analysis and again at prepare/confirm.</td><td>Implemented and tested</td></tr>
+<tr><td>Multi-agent separation</td><td>Orchestrator, Doc Parsing, ML Analysis and Eval definitions use controlled tools; services remain authoritative.</td><td>Implemented</td></tr>
+<tr><td>MCP tools</td><td>FastMCP Streamable HTTP mounted inside the backend at <code>/mcp/</code>.</td><td>Implemented</td></tr>
+<tr><td>AWS data architecture</td><td>Local Postgres/storage abstractions have AWS-oriented DynamoDB/S3 paths; infrastructure deployment remains.</td><td>Partially implemented / deployment pending</td></tr>
+</table>
+
+<div class="page-break"></div><h2>3. Current local deployment topology</h2>
+<div class="diagram">
+ <div class="row"><div class="box dark">User browser<br><span class="small">Human review and confirmation</span></div></div>
+ <div class="arrow">↓</div>
+ <div class="row"><div class="box teal">Streamlit UI · port 8501<br><span class="small">Presentation and server-bound demo session</span></div></div>
+ <div class="arrow">↓ REST/JSON</div>
+ <div class="row"><div class="box">FastAPI backend · port 8000<br><span class="small">REST API + agents + FastMCP at /mcp/</span></div><div class="box gold">External MCP client<br><span class="small">Streamable HTTP with SSE Accept header</span></div></div>
+ <div class="row"><div class="arrow">↓</div><div class="arrow">↙ http://localhost:8000/mcp/</div></div>
+ <div class="row"><div class="box teal">Application services<br><span class="small">Financial logic and safety boundaries</span></div><div class="box">Provider adapters<br><span class="small">Market, FX, LLM and Alpaca paper APIs</span></div></div>
+ <div class="arrow">↓</div>
+ <div class="row"><div class="box dark">PostgreSQL 16 · port 5432<br><span class="small">Ledger, decisions, sessions, windows and audit records</span></div><div class="box">local-data volume<br><span class="small">Statement objects and manifests</span></div></div>
+</div>
+<p>The default Compose topology contains three always-on services: <b>postgres</b>, <b>backend</b> and <b>ui</b>. MCP is deliberately restored to the backend container. An optional WhatsApp tunnel profile remains in Compose but its UI navigation entry has been removed.</p>
+
+<h2>4. Layered application architecture</h2>
+<table><tr><th>Layer</th><th>Responsibility</th><th>Key modules</th></tr>
+<tr><td>Domain</td><td>Enums, typed results and business errors; no web or LLM dependencies.</td><td><code>app/domain</code></td></tr>
+<tr><td>Services</td><td>Authoritative ingestion, statistics, analysis, conflicts, harvesting, evaluation, portfolio calculations, sessions and paper execution.</td><td><code>app/services</code></td></tr>
+<tr><td>Persistence</td><td>Async SQLAlchemy models, session factory and Alembic migrations.</td><td><code>app/persistence</code>, <code>alembic</code></td></tr>
+<tr><td>Providers</td><td>Protocols and fake/live adapters. Providers supply data; they never decide safety.</td><td><code>app/providers</code></td></tr>
+<tr><td>Adapters</td><td>Statement object storage and interchangeable rolling-window stores.</td><td><code>app/adapters</code></td></tr>
+<tr><td>Parsers</td><td>Deterministic bank/brokerage PDF extraction and validation.</td><td><code>app/parsers</code></td></tr>
+<tr><td>Agents</td><td>Routing and human-readable explanation using tool results.</td><td><code>app/agents</code></td></tr>
+<tr><td>MCP</td><td>Typed, read/analysis-oriented wrappers around application services.</td><td><code>app/mcp</code></td></tr>
+<tr><td>API</td><td>Health, upload, analysis, sessions, candidate preparation/confirmation and order refresh.</td><td><code>app/api</code></td></tr>
+<tr><td>UI</td><td>Professional Streamlit presentation; no duplicated financial rules.</td><td><code>app/ui</code></td></tr>
+<tr><td>Jobs/demo</td><td>Thin CLI entry points and deterministic fixture generation.</td><td><code>app/jobs</code>, <code>app/demo_data</code></td></tr>
+</table>
+
+<div class="page-break"></div><h2>5. Multi-agent and MCP design</h2>
+<div class="diagram"><div class="row"><div class="box dark">Orchestrator</div></div><div class="row"><div class="box">Doc Parsing Agent</div><div class="box">ML Analysis Agent</div><div class="box red">Eval Agent</div></div><div class="arrow">↓ controlled tools only</div><div class="row"><div class="box teal">MCP handlers</div></div><div class="arrow">↓</div><div class="row"><div class="box dark">Authoritative application services + persisted records</div></div></div>
+<h3>Agent responsibilities</h3>
+<ul><li><b>Orchestrator:</b> routes statement, spending, risk, drift and harvesting questions; maintains bounded conversation state; retrieves fresh authoritative results.</li><li><b>Doc Parsing Agent:</b> invokes the deterministic parsing pipeline. It does not invent missing values.</li><li><b>ML Analysis Agent:</b> initiates analysis and explains anomaly/drift outputs; it does not approve candidates.</li><li><b>Eval Agent:</b> exposes persisted deterministic evaluations and cannot replace a rule result with LLM opinion.</li></ul>
+<h3>MCP surface</h3>
+<p>Representative tools include <code>get_quote</code>, <code>get_holdings</code>, <code>get_transactions</code>, <code>parse_statement</code>, <code>get_portfolio_insights</code>, <code>run_analysis</code>, spending statistics and <code>get_paper_order_status</code>. Submission and confirmation tools are explicitly forbidden.</p>
+<div class="danger callout"><b>Critical boundary:</b> MCP and agents cannot call <code>submit_paper_order</code> or <code>confirm_paper_order</code>. Only the guarded REST/UI workflow can reach paper execution.</div>
+<h3>Conversation state</h3><p>Conversation sessions and items are persisted separately from financial truth. Memory can preserve conversational continuity, but balances, transactions, holdings, quotes and decisions are retrieved again through services/tools for authoritative answers.</p>
+
+<h2>6. Statement ingestion flow</h2>
+<div class="flow"><div class="num">1</div><div>User uploads a PDF through Streamlit.</div><div class="num">2</div><div>FastAPI validates file type/size and binds the request to the demo user.</div><div class="num">3</div><div>Document type is recognized and a deterministic bank or brokerage parser extracts rows.</div><div class="num">4</div><div>Schema, numeric, currency, date and reconciliation checks reject malformed or inconsistent data.</div><div class="num">5</div><div>File identity prevents duplicate ingestion; duplicates return the existing statement record.</div><div class="num">6</div><div>Normalized transactions, holdings, purchases, sales, dividends and tax lots are committed atomically.</div><div class="num">7</div><div>Raw/local objects remain separate from normalized relational records.</div></div>
+<div class="callout"><b>Fail-closed parsing:</b> missing basis is not inferred, malformed financial values are rejected, and conversation memory never substitutes for document evidence.</div>
+
+<div class="page-break"></div><h2>7. Analysis and evaluation pipeline</h2>
+<div class="diagram"><div class="row"><div class="box">Persisted ledger</div><div class="arrow">+</div><div class="box">Rolling price/FX windows</div></div><div class="arrow">↓</div><div class="row"><div class="box teal">Feature calculation + IsolationForest</div><div class="box teal">Portfolio allocation + drift</div><div class="box teal">Tax-lot loss calculation</div></div><div class="arrow">↓</div><div class="row"><div class="box gold">Candidate generation</div></div><div class="arrow">↓ every candidate</div><div class="row"><div class="box red">Deterministic hard-gate evaluation</div></div><div class="arrow">↓ persisted final status</div><div class="row"><div class="box teal">Approved + ranked</div><div class="box red">Protected/rejected + reason</div></div></div>
+<h3>Anomaly detection</h3><p>Feature calculation uses deterministic transaction history, seeded IsolationForest configuration, minimum-history thresholds and persisted scores. Flags indicate transactions requiring review; they are not proof of fraud.</p>
+<h3>Portfolio drift</h3><p>Holdings are valued, grouped by asset class and compared with target allocations. Risk limits and drift tolerances are stored as data rather than embedded in the UI.</p>
+<h3>Candidate generation and ranking</h3><p>Losses are computed from reference quote, quantity and known basis. Candidates below the configured minimum usable loss remain visible as protected decisions. Approved candidates are ranked only after all hard gates pass.</p>
+<h3>Representative rejection codes</h3>
+<table><tr><th>Control</th><th>Meaning for a stakeholder</th></tr><tr><td>WASH_SALE_CONFLICT</td><td>A known equity purchase conflicts with the 30-day wash-sale window.</td></tr><tr><td>SUBSTANTIALLY_IDENTICAL_REPLACEMENT</td><td>The proposed replacement is treated as too similar.</td></tr><tr><td>CRYPTO_REPURCHASE_CONFLICT</td><td>Blocked by the project's conservative crypto repurchase policy, not stated as tax law.</td></tr><tr><td>RISK_PROFILE_VIOLATION</td><td>The resulting allocation would violate the user's configured tolerance.</td></tr><tr><td>MISSING_BASIS</td><td>Cost basis is absent and is not guessed.</td></tr><tr><td>STALE_QUOTE</td><td>The reference price exceeds the freshness limit.</td></tr><tr><td>INSUFFICIENT_MIRROR_QUANTITY</td><td>The mapped Alpaca paper account cannot safely execute the proposed quantity.</td></tr><tr><td>PROFITABLE_LOT / BELOW_THRESHOLD</td><td>The lot is not a meaningful harvest candidate.</td></tr></table>
+
+<div class="page-break"></div><h2>8. Paper-trading execution architecture</h2>
+<div class="flow"><div class="num">1</div><div>Analysis produces a persisted <b>APPROVED</b> candidate.</div><div class="num">2</div><div>User chooses an equity/ETF candidate in the web application.</div><div class="num">3</div><div><code>prepare</code> reruns critical gates and creates a short-lived, read-only snapshot plus single-use token.</div><div class="num">4</div><div>UI displays account, paper alias, symbol, SELL quantity, reference price, basis, proceeds and estimated loss in plain English.</div><div class="num">5</div><div>User must select an initially unchecked review control; the confirmation button remains disabled until guards pass.</div><div class="num">6</div><div><code>confirm</code> verifies session binding, token, expiry, snapshot integrity, approval, freshness, quantity and paper-only configuration.</div><div class="num">7</div><div>Only then may <code>PaperExecutionService</code> submit an idempotent SELL to the mapped Alpaca paper account.</div><div class="num">8</div><div>User explicitly refreshes status; fill price and timestamps are stored separately from the evaluation reference quote.</div></div>
+<div class="warn callout"><b>Operational switches:</b> <code>ALPACA_PAPER=true</code> is mandatory. <code>ENABLE_PAPER_ORDERS=false</code> prevents submission while still allowing review. Replacement BUYs are display-only.</div>
+<p>Paper mirror setup purchases are separate operational activity recorded as <code>PAPER_MIRROR_SETUP</code>. They establish executable inventory but never modify synthetic tax lots or realized tax history.</p>
+
+<h2>9. Provider architecture and data ownership</h2>
+<table><tr><th>Data / capability</th><th>Owner</th><th>Controls</th></tr><tr><td>Equity/ETF reference prices</td><td>Alpha Vantage; Alpaca market-data fallback is implemented for live freshness scenarios</td><td>Timestamp, provider attribution, rate-limit handling</td></tr><tr><td>Crypto prices</td><td>CoinGecko</td><td>Explicit canonical-to-CoinGecko ID mapping</td></tr><tr><td>FX conversion</td><td>Frankfurter</td><td>Effective-date handling for weekends/holidays</td></tr><tr><td>Paper holdings/orders/fills</td><td>Alpaca paper API</td><td>Forced paper mode, alias mapping, asset-class and quantity checks</td></tr><tr><td>Financial ledger and evaluations</td><td>PostgreSQL application database</td><td>Relational integrity and audit history</td></tr><tr><td>LLM explanation/routing</td><td>OpenAI Agents SDK</td><td>Tool allowlist, deterministic fallback and no execution authority</td></tr></table>
+<p>Provider errors fail closed. Automated tests mock all provider responses; credential-dependent checks are executed separately with <code>app.verify_integrations</code>.</p>
+
+<div class="page-break"></div><h2>10. Data architecture</h2>
+<h3>Relational ledger</h3>
+<p>PostgreSQL stores users, portfolio accounts, assets, statements, transactions, holdings, tax lots, brokerage events, risk profiles, target allocations, analysis runs, candidates, evaluations, conflicts, preparations, paper orders, mirror manifests/activity, anomaly scores, rolling-window records and agent/demo sessions.</p>
+<div class="diagram"><div class="row"><div class="box">User</div><div class="arrow">1 → N</div><div class="box">Portfolio account</div><div class="arrow">1 → N</div><div class="box">Holdings / tax lots</div></div><div class="row"><div class="box">Statement</div><div class="arrow">→</div><div class="box">Transactions / brokerage events</div></div><div class="row"><div class="box">Analysis run</div><div class="arrow">→</div><div class="box">Candidates</div><div class="arrow">→</div><div class="box">Evaluations</div></div><div class="row"><div class="box">Approved candidate</div><div class="arrow">→</div><div class="box">Preparation</div><div class="arrow">→</div><div class="box">Paper order / fills</div></div></div>
+<h3>Rolling-window contract</h3><ul><li><code>QUOTE#ASSET#CURRENCY</code></li><li><code>PRICE_WINDOW#ASSET#CURRENCY</code></li><li><code>ANOMALY_WINDOW#USER#FEATURE</code></li><li><code>FX#BASE#QUOTE#DATE</code></li><li><code>WINDOW_META#WINDOW_KEY</code></li></ul>
+<p>Local mode stores windows in PostgreSQL. AWS mode provides a DynamoDB adapter with equivalent logical keys. Synchronization overlaps prior data by a configured interval, and metadata advances only after successful refresh.</p>
+<h3>Statement storage</h3><p>Local mode uses the mounted <code>local-data</code> directory. The AWS target replaces this with S3 while retaining Postgres references and content identity. Raw statements are never embedded in agent conversation memory.</p>
+
+<h2>11. API and user-interface surfaces</h2>
+<table><tr><th>Surface</th><th>Representative operations</th><th>Authority</th></tr><tr><td>REST API</td><td>Health, demo sessions, statement upload, holdings, analyses, candidate decisions, prepare/confirm, refresh, orchestrator chat</td><td>Calls application services</td></tr><tr><td>MCP</td><td>Quotes, holdings, transactions, parsing, statistics, portfolio insights, analysis and final decision retrieval</td><td>No confirmation/submission tools</td></tr><tr><td>Streamlit</td><td>Portfolio overview, uploads, questions, anomalies, analysis, drift, candidates, evaluations and paper orders</td><td>Presentation and explicit human interaction</td></tr><tr><td>CLI</td><td>Seed, run analysis, sync Alpaca, mirror preview/setup, provider verification</td><td>Operational wrappers, not duplicate business logic</td></tr></table>
+<p>Nontechnical UI cards translate identifiers and raw decimals into investment, account, proposed action, estimated proceeds/loss and safety explanations. The full JSON remains available only as a technical audit record.</p>
+
+<div class="page-break"></div><h2>12. Security, privacy and safety model</h2>
+<div class="grid"><div class="card"><h3>Secrets</h3><p>Environment files are local and must never be committed. API keys, access tokens and signing secrets are excluded from UI and audit exports.</p></div><div class="card"><h3>Session binding</h3><p>A random server-side demo-session binding prevents cross-session order confirmation. It is explicitly not production authentication.</p></div><div class="card"><h3>Least authority</h3><p>Only PaperExecutionService may submit a paper SELL. Agents and MCP are excluded from confirmation/submission.</p></div><div class="card"><h3>Idempotency</h3><p>Analysis keys, preparation tokens and Alpaca client order IDs prevent accidental duplicate processing.</p></div><div class="card"><h3>Source separation</h3><p>Reference quotes, Alpaca fills, synthetic tax history and mirror setup activity remain distinct.</p></div><div class="card"><h3>Fail closed</h3><p>Missing, stale, inconsistent or unauthorized data produces a protected/rejected result—not a best guess.</p></div></div>
+<h3>Known production gaps</h3><ul><li>The local demo session is not user authentication.</li><li>AWS network controls, managed secrets, TLS, IAM, backups and monitoring are not yet deployed.</li><li>Tax-loss calculations are educational and not a complete tax-return engine.</li><li>The 30-day crypto policy is conservative project policy, not presented as current tax law.</li><li>LangSmith is not currently integrated; Docker logs, persisted audit tables, tests and GitHub issues provide present diagnostics.</li></ul>
+
+<h2>13. Testing and quality strategy</h2>
+<table><tr><th>Test group</th><th>Coverage</th></tr><tr><td>Unit</td><td>Features, thresholds, freshness, conflict fingerprints, drift, ranking, MCP/agent boundaries, confirmation state and CLI contract.</td></tr><tr><td>Parser</td><td>Bank/brokerage extraction, PDF validation, deterministic current-demo generation and reconciliation.</td></tr><tr><td>Service</td><td>Analysis, sessions, paper execution, Alpaca sync, reconciliation, statistics and mirror seeding/idempotency.</td></tr><tr><td>Provider</td><td>Mocked HTTP/SDK adapters, mappings, parsing and error behavior.</td></tr><tr><td>Integration</td><td>Seed/ingest, persisted rolling windows and Phase 2 flows.</td></tr><tr><td>UI</td><td>Manual confirmation guards and nontechnical paper-order summary.</td></tr></table>
+<p><b>Current verified baseline:</b> 79 automated tests passed after restoring embedded MCP. Live verification has succeeded for CoinGecko, Frankfurter and both Alpaca paper aliases; Alpha Vantage may return free-tier rate limits.</p>
+
+<div class="page-break"></div><h2>14. Target AWS architecture</h2>
+<div class="diagram"><div class="row"><div class="box dark">Allowed operator IP</div><div class="arrow">→ HTTPS</div><div class="box teal">Application Load Balancer</div></div><div class="arrow">↓</div><div class="row"><div class="box">UI container service</div><div class="box">Backend + embedded MCP container service</div></div><div class="row"><div class="box dark">RDS PostgreSQL<br><span class="small">Ledger + relational integrity</span></div><div class="box dark">DynamoDB<br><span class="small">Price/anomaly rolling windows</span></div><div class="box dark">S3<br><span class="small">Raw statement objects</span></div></div><div class="row"><div class="box gold">Secrets Manager / task secrets</div><div class="box gold">CloudWatch logs and alarms</div></div><div class="row"><div class="box">Alpha Vantage</div><div class="box">CoinGecko</div><div class="box">Frankfurter</div><div class="box">Alpaca paper</div><div class="box">OpenAI</div></div></div>
+<p>The submitted scope intentionally excludes EventBridge, SQS, background workers and schedulers. Analysis remains user/CLI triggered unless stakeholders explicitly expand the scope.</p>
+<h3>Recommended deployment sequence</h3><ol><li>Provision private networking, RDS, S3 and DynamoDB with least-privilege IAM.</li><li>Store credentials outside images and source control.</li><li>Build and push immutable backend/UI container images.</li><li>Run Alembic migration as a controlled deployment task.</li><li>Deploy services behind TLS and IP restriction; expose MCP only where required.</li><li>Seed deterministic demo data without production credentials.</li><li>Run health/readiness, mocked smoke tests and credential-dependent provider checks.</li><li>Keep paper submission disabled by default; enable only for a supervised demonstration.</li></ol>
+
+<h2>15. Operational runbook</h2>
+<table><tr><th>Purpose</th><th>Command / endpoint</th></tr><tr><td>Start local system</td><td><code>docker compose up --build -d</code></td></tr><tr><td>Check containers</td><td><code>docker compose ps</code></td></tr><tr><td>Readiness</td><td><code>http://localhost:8000/health/ready</code></td></tr><tr><td>API documentation</td><td><code>http://localhost:8000/docs</code></td></tr><tr><td>MCP endpoint</td><td><code>http://localhost:8000/mcp/</code> (MCP client; browser SSE error is expected)</td></tr><tr><td>Web application</td><td><code>http://localhost:8501</code></td></tr><tr><td>Full tests</td><td><code>docker compose run --rm backend pytest</code></td></tr><tr><td>Provider checks</td><td><code>python -m app.verify_integrations --all</code></td></tr><tr><td>Backend logs</td><td><code>docker compose logs -f --tail=100 backend</code></td></tr></table>
+
+<h2>16. Completion assessment and next steps</h2>
+<table><tr><th>Area</th><th>Assessment</th><th>Remaining evidence/work</th></tr><tr><td>Core financial application</td><td>Complete for demonstration scope</td><td>Maintain deterministic fixtures and tests.</td></tr><tr><td>UI and stakeholder presentation</td><td>Complete and professionally formatted</td><td>Run analysis after a UI/container restart to repopulate current session state.</td></tr><tr><td>MCP and agents</td><td>Implemented</td><td>MCP remains embedded in backend per restored design.</td></tr><tr><td>Live providers</td><td>Implemented</td><td>Alpha Vantage free-tier rate limits can block live checks.</td></tr><tr><td>Alpaca connectivity</td><td>Verified</td><td>Complete one supervised, manually confirmed paper SELL and refresh/fill evidence.</td></tr><tr><td>AWS</td><td>Not deployed</td><td>Provision, deploy, secure and perform cloud smoke tests.</td></tr></table>
+<div class="callout"><b>Final position:</b> the project strongly aligns with the original problem statement locally. The major remaining deliverables are the supervised Alpaca end-to-end execution evidence and AWS deployment. Scheduling was intentionally omitted by stakeholder direction.</div>
+
+<h2>Appendix A — Key configuration controls</h2>
+<table><tr><th>Variable</th><th>Purpose</th><th>Safe default</th></tr><tr><td>USE_LIVE_PROVIDERS</td><td>Select fake/deterministic or live market adapters.</td><td>false</td></tr><tr><td>ALPACA_PAPER</td><td>Enforces paper-trading endpoints.</td><td>true</td></tr><tr><td>ENABLE_PAPER_ORDERS</td><td>Global order-submission kill switch.</td><td>false</td></tr><tr><td>QUOTE_MAX_AGE_MINUTES</td><td>Rejects stale execution references.</td><td>15</td></tr><tr><td>MIN_LOSS_THRESHOLD</td><td>Minimum usable loss for approval.</td><td>50.00</td></tr><tr><td>DEMO_MODE / DEMO_AS_OF_DATE</td><td>Controls deterministic historical/current demo clock.</td><td>Fixed in tests</td></tr><tr><td>ISOLATION_FOREST_SEED</td><td>Makes anomaly-model results repeatable.</td><td>42</td></tr></table>
+<p class="footer-note">Prepared from the repository architecture, README, Compose topology, service/module structure and verified test baseline. No credentials or secret values are included.</p>
+</body></html>
