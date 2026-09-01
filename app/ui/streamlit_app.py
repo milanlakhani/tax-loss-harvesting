@@ -402,6 +402,73 @@ def _load_analysis_candidates(analysis_run_id: str) -> None:
         st.session_state.rejected_candidates = rejected.get("candidates", [])
 
 
+PREPARE_BUTTON_LABEL = "Prepare paper order"
+PREPARE_DISABLED_HELP = "A persisted APPROVED candidate is required before preparation."
+_RUNNING_ANALYSIS_STATUSES = frozenset({"PENDING", "RUNNING"})
+
+
+def _persisted_analysis_snapshot(run_id: str | None) -> dict:
+    """Load run status and candidate counts from the backend, not session cache."""
+    empty = {"kind": "none", "run": None, "approved": [], "rejected": []}
+    if not run_id:
+        return empty
+    run = _get(f"/api/analyses/{run_id}")
+    if run is None:
+        return {"kind": "unavailable", "run": None, "approved": [], "rejected": []}
+    status = str(run.get("status") or "").upper()
+    if status in _RUNNING_ANALYSIS_STATUSES:
+        return {"kind": "running", "run": run, "approved": [], "rejected": []}
+    if status == "FAILED":
+        return {"kind": "failed", "run": run, "approved": [], "rejected": []}
+    if status != "COMPLETED":
+        return {"kind": "unavailable", "run": run, "approved": [], "rejected": []}
+    approved_payload = _get(f"/api/analyses/{run_id}/candidates/approved")
+    rejected_payload = _get(f"/api/analyses/{run_id}/candidates/rejected")
+    if approved_payload is None or rejected_payload is None:
+        return {"kind": "unavailable", "run": run, "approved": [], "rejected": []}
+    approved = [row for row in approved_payload.get("candidates", []) if row.get("status") == "APPROVED"]
+    rejected = rejected_payload.get("candidates", [])
+    kind = "completed_approved" if approved else "completed_none"
+    return {"kind": kind, "run": run, "approved": approved, "rejected": rejected}
+
+
+def _render_protected_decisions(rejected: list[dict]) -> None:
+    st.subheader("Protected decisions")
+    if rejected:
+        st.dataframe(
+            [
+                {
+                    "Symbol": item.get("symbol"),
+                    "Status": _friendly_code(item.get("status")),
+                    "Control": _friendly_code(item.get("rejection_code")),
+                    "Why it matters": item.get("explanation"),
+                    "Candidate ID": item.get("candidate_id"),
+                }
+                for item in rejected
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
+def _retry_analysis_from_paper_orders() -> None:
+    result = _post(
+        "/api/analyses",
+        json={"idempotency_key": f"streamlit-{uuid4().hex}", "trigger": "API"},
+    )
+    if not result:
+        return
+    st.session_state.analysis_attempt = result
+    run_id = result.get("analysis_run_id")
+    if run_id:
+        st.session_state.analysis_run_id = run_id
+    if result.get("status") == "COMPLETED" and run_id:
+        st.session_state.analysis_result = result
+        _load_analysis_candidates(run_id)
+    elif result.get("status") == "FAILED":
+        st.session_state.analysis_result = None
+
+
 def _analysis_failure_message(reason: str | None) -> str:
     if reason and "lock:" in reason:
         return "Another analysis was already running for this portfolio. Its safety lock prevented an overlapping run. Please run the analysis again."
@@ -737,9 +804,7 @@ def main() -> None:
             st.dataframe([{"Rank":x.get("rank"),"Symbol":x.get("symbol"),"Type":x.get("asset_type"),"Quantity":x.get("selected_quantity"),"Estimated loss":x.get("estimated_loss"),"Reference price":x.get("reference_price"),"Provider":x.get("quote_provider"),"Feed":x.get("quote_feed"),"Decision":"Approved","Candidate ID":x.get("candidate_id")} for x in approved], use_container_width=True, hide_index=True)
         elif run_id:
             st.info("No candidate currently passes every safety rule. This is a valid fail-closed outcome.")
-        st.subheader("Protected decisions")
-        if rejected:
-            st.dataframe([{"Symbol":x.get("symbol"),"Status":_friendly_code(x.get("status")),"Control":_friendly_code(x.get("rejection_code")),"Why it matters":x.get("explanation"),"Candidate ID":x.get("candidate_id")} for x in rejected], use_container_width=True, hide_index=True)
+        _render_protected_decisions(rejected)
     elif page == "Evaluation details":
         st.header("Evaluation details")
         st.caption("Inspect the evidence and final policy decision for any candidate.")
@@ -767,21 +832,36 @@ def main() -> None:
     elif page == "Paper orders":
         st.header("Paper order review")
         st.caption("Select an approved opportunity, review a read-only snapshot, then use the separate confirmation control.")
-        approved_candidates = st.session_state.get("approved_candidates") or []
+        snapshot = _persisted_analysis_snapshot(st.session_state.get("analysis_run_id"))
+        kind = snapshot["kind"]
+        approved_candidates = snapshot["approved"]
+        rejected = snapshot["rejected"]
+        if kind in {"completed_approved", "completed_none"}:
+            st.session_state.approved_candidates = approved_candidates
+            st.session_state.rejected_candidates = rejected
         candidate_id = None
-        if approved_candidates:
+        if kind == "none":
+            st.info("Run Portfolio analysis first. Only opportunities that pass every safety rule can be prepared.")
+        elif kind == "running":
+            st.info("Portfolio analysis is in progress.")
+        elif kind == "failed":
+            st.error(_analysis_failure_message((snapshot["run"] or {}).get("failure_reason")))
+            if st.button("Retry analysis", key="paper_orders_retry_analysis"):
+                _retry_analysis_from_paper_orders()
+                st.rerun()
+        elif kind == "completed_none":
+            st.info("Analysis completed, but no opportunities passed every safety rule. Review Protected decisions for the reasons.")
+        elif kind == "completed_approved":
             choices = {
                 f"#{item.get('rank') or '—'} · {item.get('symbol')} · {item.get('account')} · {_currency(item.get('estimated_loss'))} estimated loss": item.get("candidate_id")
                 for item in approved_candidates
             }
             candidate_id = choices[st.selectbox("Approved opportunity", list(choices))]
-        else:
-            st.info("Run Portfolio analysis first. Only opportunities that pass every safety rule can be prepared.")
         if st.button(
-            "Prepare paper order",
+            PREPARE_BUTTON_LABEL,
             type="primary",
             disabled=not candidate_id,
-            help=None if candidate_id else "A persisted APPROVED candidate is required before preparation.",
+            help=None if candidate_id else PREPARE_DISABLED_HELP,
         ) and candidate_id:
             prepared = _post(f"/api/candidates/{candidate_id}/prepare")
             if prepared:
@@ -789,6 +869,8 @@ def main() -> None:
                 st.session_state.paper_enabled = bool(prepared.get("paper_orders_enabled"))
                 st.session_state.candidate_approved = prepared.get("approval_status") == "APPROVED"
                 st.session_state.order_submitted = False
+        if kind in {"completed_none", "completed_approved"}:
+            _render_protected_decisions(rejected)
         render_confirm_panel(
             snapshot=st.session_state.get("prepared_snapshot"),
             paper_enabled=bool(st.session_state.get("paper_enabled", False)),
