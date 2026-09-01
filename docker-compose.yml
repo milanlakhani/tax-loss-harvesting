@@ -36,26 +36,6 @@ services:
     command: >
       sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
-  mcp:
-    build: .
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      APP_ENV: local
-      DATABASE_URL: postgresql+psycopg://finance:finance@postgres:5432/finance
-      TEST_DATABASE_URL: postgresql+psycopg://finance:finance@postgres:5432/finance_test
-      LOCAL_DATA_DIR: /app/local-data
-    env_file:
-      - path: .env
-        required: false
-    ports:
-      - "8001:8001"
-    volumes:
-      - ./local-data:/app/local-data
-    command: >
-      uvicorn app.mcp_main:app --host 0.0.0.0 --port 8001
-
   ui:
     build: .
     depends_on:

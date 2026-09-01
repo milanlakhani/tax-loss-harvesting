@@ -21,6 +21,6 @@ ENV LOCAL_DATA_DIR=/app/local-data
 
 RUN mkdir -p /app/local-data
 
-EXPOSE 8000 8001 8501
+EXPOSE 8000 8501
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

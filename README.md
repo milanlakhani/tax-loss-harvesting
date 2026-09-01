@@ -25,10 +25,10 @@ docker compose up --build
 
 | Surface | URL |
 | --- | --- |
-| Backend (FastAPI + agents) | http://localhost:8000 |
+| Backend (FastAPI + agents + one FastMCP server) | http://localhost:8000 |
 | Health | http://localhost:8000/health |
 | Readiness | http://localhost:8000/health/ready |
-| MCP Streamable HTTP (dedicated container) | http://localhost:8001/ |
+| MCP Streamable HTTP | http://localhost:8000/mcp |
 | Streamlit UI (separate container) | http://localhost:8501 |
 | PostgreSQL | localhost:5432 user/password/db `finance` |
 
