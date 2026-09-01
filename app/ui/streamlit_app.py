@@ -423,8 +423,61 @@ def render_confirm_panel(
         st.info("Prepare an approved candidate to see the read-only order snapshot.")
         return
     display = {key: value for key, value in snapshot.items() if key != "token"}
-    st.subheader("Read-only order snapshot")
-    st.json(display)
+    quantity = snapshot.get("quantity")
+    try:
+        quantity_display = f"{float(quantity):,.4f}".rstrip("0").rstrip(".")
+    except (TypeError, ValueError):
+        quantity_display = str(quantity or "â€”")
+    st.subheader("Order review summary")
+    st.caption("A plain-English preview for review. Preparing this snapshot does not place an order.")
+    _status_cards(
+        [
+            {
+                "label": "Investment",
+                "value": snapshot.get("symbol") or "â€”",
+                "meta": _friendly_code(snapshot.get("asset_type")),
+            },
+            {
+                "label": "Proposed action",
+                "value": f"SELL {quantity_display}",
+                "meta": "Quantity selected from the tax lot",
+                "variant": "warning",
+            },
+            {
+                "label": "Estimated proceeds",
+                "value": _currency(snapshot.get("estimated_proceeds")),
+                "meta": "Based on the reference quote",
+            },
+            {
+                "label": "Estimated tax loss",
+                "value": _currency(snapshot.get("estimated_loss")),
+                "meta": "Before fees and final execution price",
+                "variant": "success",
+            },
+        ]
+    )
+    if snapshot.get("approval_status") == "APPROVED":
+        st.success("Safety review passed: wash-sale, risk, data-quality and execution gates approved this candidate.")
+    else:
+        st.warning("This candidate is not approved for preparation.")
+    st.dataframe(
+        [
+            {"Review item": "Account", "What it means": snapshot.get("account_name") or "â€”"},
+            {"Review item": "Paper account", "What it means": snapshot.get("alpaca_alias") or "â€”"},
+            {"Review item": "Reference price", "What it means": _currency(snapshot.get("reference_price"))},
+            {"Review item": "Cost basis", "What it means": _currency(snapshot.get("basis"))},
+            {"Review item": "Data source", "What it means": _friendly_code(snapshot.get("quote_provider"))},
+            {
+                "Review item": "Submission status",
+                "What it means": "Locked â€” review only" if not paper_enabled else "Paper submission enabled",
+            },
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
+    st.caption("The reference price is an estimate. Any eventual Alpaca fill is recorded separately.")
+    with st.expander("Technical audit record"):
+        st.json(display)
     checked = st.checkbox(
         "I reviewed the account, asset, SELL action, and quantity and understand that a simulated Alpaca paper order will be submitted.",
         value=False,

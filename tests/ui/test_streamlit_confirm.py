@@ -33,6 +33,9 @@ def test_confirm_paper_sale_button_enforces_checkbox_and_guards():
     at.sidebar.radio[0].set_value("Paper orders")
     at.run()
     assert "SIMULATED PAPER TRADE - NO REAL MONEY" in at.warning[0].value
+    assert any(header.value == "Order review summary" for header in at.subheader)
+    assert any("Safety review passed" in message.value for message in at.success)
+    assert any(expander.label == "Technical audit record" for expander in at.expander)
     confirm = next(b for b in at.button if b.label == "Confirm paper sale")
     assert confirm.disabled is True
     at.checkbox[0].check()
