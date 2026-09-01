@@ -3,13 +3,10 @@ from __future__ import annotations
 import os
 import re
 import secrets
-from io import BytesIO
 from html import escape
-from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
-import qrcode
 import streamlit as st
 
 from app.ui.confirm_state import confirm_button_enabled
@@ -17,21 +14,6 @@ from app.ui.confirm_state import confirm_button_enabled
 BACKEND = os.environ.get("BACKEND_URL", "http://localhost:8000")
 PAPER_BANNER = "SIMULATED PAPER TRADE - NO REAL MONEY"
 DEFAULT_USER = "11111111-1111-4111-8111-111111111111"
-
-
-def _whatsapp_link(phone_number: str, message: str) -> str:
-    """Build a safe click-to-chat URL without placing credentials in the QR."""
-    digits = re.sub(r"\D", "", phone_number)
-    if not digits:
-        return ""
-    return f"https://wa.me/{digits}?text={quote(message.strip())}"
-
-
-def _whatsapp_qr(link: str) -> bytes:
-    image = qrcode.make(link)
-    output = BytesIO()
-    image.save(output, format="PNG")
-    return output.getvalue()
 
 
 def _inject_style() -> None:
@@ -532,7 +514,6 @@ def main() -> None:
             "Tax-loss candidates",
             "Evaluation details",
             "Paper orders",
-            "WhatsApp integration",
         ],
     )
     st.sidebar.markdown("---")

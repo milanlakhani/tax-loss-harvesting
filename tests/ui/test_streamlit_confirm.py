@@ -32,6 +32,7 @@ def test_confirm_paper_sale_button_enforces_checkbox_and_guards():
     at.run()
     at.sidebar.radio[0].set_value("Paper orders")
     at.run()
+    assert "WhatsApp integration" not in at.sidebar.radio[0].options
     assert "SIMULATED PAPER TRADE - NO REAL MONEY" in at.warning[0].value
     assert any(header.value == "Order review summary" for header in at.subheader)
     assert any("Safety review passed" in message.value for message in at.success)
