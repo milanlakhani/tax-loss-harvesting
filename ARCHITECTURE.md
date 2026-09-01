@@ -12,7 +12,7 @@
 - **adapters** — statement storage and `RollingWindowStore` (PostgreSQL local, in-memory fake,
   DynamoDB for `APP_ENV=aws` with the same logical keys).
 - **parsers** — deterministic PyMuPDF parsers.
-- **mcp** — FastMCP Streamable HTTP at `/mcp`. Thin typed wrappers around application services.
+- **mcp** — Dedicated FastMCP container exposing Streamable HTTP on port `8001`. Thin typed wrappers around application services; it shares the Postgres ledger and provider configuration but not the backend HTTP process.
 - **agents** — Orchestrator, Document Parsing, ML Analysis, and Eval agents call MCP tools.
   The Eval agent cannot substitute LLM opinion for a rule. The Orchestrator only reports persisted
   candidate statuses.
