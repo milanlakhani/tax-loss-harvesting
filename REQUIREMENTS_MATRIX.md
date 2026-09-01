@@ -6,7 +6,7 @@ Status is complete only when the behavior is implemented and covered by tests, n
 | --- | --- | --- |
 | Python 3.12, FastAPI, Uvicorn, PostgreSQL, SQLAlchemy 2, Alembic, psycopg, scikit-learn, PyMuPDF, pydantic-settings, pytest, Docker Compose | `requirements.txt`, `Dockerfile`, `docker-compose.yml`, `pytest.ini` | Runtime install; README versions |
 | Pin compatible versions; record tested Python/Docker in README | `requirements.txt`, `README.md` | README |
-| Backend container + PostgreSQL + Compose; Streamlit added as a separate Phase 2 service | `Dockerfile`, `docker-compose.yml` | Compose file has postgres+backend+ui |
+| Backend container + PostgreSQL + Compose; Streamlit added as a separate Phase 2 service; MCP is its own Compose service | `Dockerfile`, `docker-compose.yml` | Compose file has postgres+backend+ui+mcp |
 | Alembic migrations | `alembic/`, `alembic.ini` | `alembic upgrade head` in verification |
 | `.env.example`, `.gitignore`, README, ARCHITECTURE, this matrix | repo root | files exist |
 | Unit, DB-integration, parser, service-integration tests | `tests/unit`, `tests/integration`, `tests/parsers`, `tests/services` | pytest collection |
@@ -82,7 +82,7 @@ Status is complete only when the behavior is implemented and covered by tests, n
 | Requirement | Implementation | Tests |
 | --- | --- | --- |
 | Pinned OpenAI Agents SDK, FastMCP, Streamlit, alpaca-py, httpx | `requirements.txt` | install + imports |
-| Streamlit in a separate Compose service; FastAPI+agents+MCP in backend; Postgres separate | `docker-compose.yml` | compose file |
+| Streamlit in a separate Compose service; FastAPI+agents in backend; FastMCP in `mcp`; Postgres separate | `docker-compose.yml`, `docker-compose.debug-mcp.yml` | `test_mcp_split.py` |
 | Live adapters behind Phase 1 protocols; Alpaca `paper=True` forced | `app/providers/*.py`, `ALPACA_PAPER_FORCED` | `tests/providers/test_live_adapters.py` |
 | EQUITY/ETF current quotes from Alpaca Market Data (`iex` default); history from Alpha Vantage | `AlpacaMarketDataProvider`, `build_live_providers` | `test_live_router_splits_*`, `test_alpaca_market_data_records_iex_feed_*` |
 | Record quote provider, feed, source/retrieval timestamps, freshness; never substitute fill/avg/AV close | `Quote.provenance`, window CURRENT, evaluation `extra`, paper snapshot | `test_window_sync_keeps_alpaca_current_*`, `test_alpaca_market_data_fails_closed_without_using_history_*` |
@@ -95,8 +95,10 @@ Status is complete only when the behavior is implemented and covered by tests, n
 | Normalized Quote/FxRate records; deterministic routing | `protocols.ProviderRouter` | routing + analysis tests |
 | RollingWindowStore local PG + DynamoDB contract (same keys) | `postgres_window_store`, `dynamodb_window_store` | `test_window_postgres.py`, `test_window_contract.py` |
 | Incremental fetch, overlap, no meta advance on failure | `WindowSyncService` | window contract tests |
-| FastMCP Streamable HTTP at `/mcp`; listed read/analysis tools only | `app/mcp/server.py` | `test_mcp_and_agents.py` |
+| FastMCP Streamable HTTP in a standalone container at `/mcp` on port 8001; listed read/analysis tools only | `app/mcp/asgi.py`, `app/mcp/server.py` | `test_mcp_and_agents.py`, `test_mcp_http.py`, `test_mcp_split.py` |
+| FastAPI does not mount `/mcp`; agents use `MCP_SERVER_URL` over HTTP | `app/main.py`, `app/agents/mcp_client.py` | `test_mcp_split.py`, `test_mcp_http.py` |
 | No submit/confirm/prepare/Alpaca SDK via MCP | `FORBIDDEN_MCP_TOOLS` | agents cannot submit |
+| MCP unavailability is fail-closed; cannot skip safety evaluation | `McpUnavailableError`, `/health/ready` | `test_mcp_unavailability_is_fail_closed` |
 | Orchestrator / Parser / ML / Eval agents call MCP only | `app/agents/` | unit + session tests |
 | Persistent per-user Orchestrator sessions; resume/reset/close; isolation | `OrchestratorSessionService` | `test_orchestrator_sessions.py` |
 | Conversation not source of truth; no secrets/PDFs stored | session sanitization + MCP on every query | session + MCP tests |
@@ -114,10 +116,7 @@ Status is complete only when the behavior is implemented and covered by tests, n
 | Separate pinned CDK v2 Python project | `infrastructure/` | `infrastructure/tests/test_stack.py` |
 | VPC 2 AZ, public ALB+task, isolated RDS, no NAT, S3/DDB gateway endpoints | `stacks/tlh_stack.py` | template assertions |
 | CIDR-restricted ALB; fail synth on blank/`0.0.0.0/0` | `stacks/cidr.py` | `test_require_allowed_cidr_*` |
-| Fargate public IP, desired count 1, dual containers/target groups | ECS+ALB in stack | routing + AssignPublicIp tests |
+| Fargate public IP, desired count 1, FastAPI + FastMCP + Streamlit containers in one task; ALB only for FastAPI/Streamlit | ECS+ALB in stack | routing + AssignPublicIp + MCP sidecar tests |
 | Secrets Manager JSON keys; RDS-generated DB secret; no plaintext keys | app secret + ECS secrets | template scan |
 | DynamoDB pk/sk, on-demand, TTL; S3 encrypted + blocked public | stack table/bucket | template tests |
-| APP_ENV=aws S3 + DynamoDB + optional SM overlay; local unchanged | `s3_storage`, `secrets`, `live.build_window_store` | `test_aws_adapters.py` |
-| Shared rolling-window semantics | DynamoDB emulator + memory/Postgres | `test_window_postgres.py`, `test_aws_adapters.py` |
-| Demo destroy vs retain production-named env | `destroy_compatible` | removal-policy tests |
-| WhatsApp not public on AWS | no 0.0.0.0/0; WhatsApp secrets omitted | template + README |
+| APP_ENV=aws S3 + DynamoDB + optional SM overlay;

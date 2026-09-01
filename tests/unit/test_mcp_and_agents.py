@@ -14,7 +14,7 @@ from app.agents.runner import (
     _route,
     run_orchestrator_turn,
 )
-from app.mcp.tools import FORBIDDEN_MCP_TOOLS, MCP_TOOL_NAMES, McpToolHandlers
+from app.mcp.tools import FORBIDDEN_MCP_TOOLS, MCP_TOOL_NAMES, MCP_TOOL_PARAMETERS, McpToolHandlers
 
 
 @pytest.mark.unit
@@ -29,6 +29,7 @@ def test_mcp_exposes_analysis_tools_but_not_submission():
     assert agents_cannot_submit() is True
     assert "submit_paper_order" not in agent_tool_allowlist()
     assert "Never substitute LLM opinion" in EVAL_INSTRUCTIONS
+    assert MCP_TOOL_PARAMETERS["run_analysis"] == ("user_id", "idempotency_key")
 
 
 @pytest.mark.unit

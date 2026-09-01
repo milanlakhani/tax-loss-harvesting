@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -29,6 +30,7 @@ class AppContainer:
     windows: RollingWindowStore
     clock: RecordingClock
     ingestor: StatementIngestor
+    mcp_gateway: Any | None = field(default=None)
 
     def analysis_deps(self) -> AnalysisDependencies:
         return AnalysisDependencies(
@@ -41,6 +43,12 @@ class AppContainer:
 
     def paper_execution(self) -> PaperExecutionService:
         return PaperExecutionService(self.settings, self.session_factory, self.providers, self.clock)
+
+    def remote_mcp_handlers(self):
+        from app.agents.mcp_client import McpGateway, RemoteMcpHandlers
+
+        gateway = self.mcp_gateway if self.mcp_gateway is not None else McpGateway(self.settings.mcp_server_url)
+        return RemoteMcpHandlers(gateway)
 
 
 def _build_storage(settings: Settings) -> StatementStorage:

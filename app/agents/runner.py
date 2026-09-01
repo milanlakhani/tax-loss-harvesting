@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.container import AppContainer
-from app.mcp.tools import McpToolHandlers
+from app.domain.errors import MCP_UNAVAILABLE_MESSAGE, McpUnavailableError
 from app.services.orchestrator_sessions import OrchestratorSessionService
 
 
@@ -26,28 +26,44 @@ async def run_orchestrator_turn(
     demo_session_id: UUID,
     message: str,
 ) -> dict:
-    """Run one Orchestrator turn. Financial answers always come from MCP handlers, never memory."""
+    """Run one Orchestrator turn. Financial answers always come from MCP over HTTP, never memory."""
     sessions = OrchestratorSessionService(container.session_factory)
     active = await sessions.get_active(user_id=user_id, demo_session_id=demo_session_id)
     if active is None:
         active = await sessions.start(user_id=user_id, demo_session_id=demo_session_id)
-    handlers = McpToolHandlers(container)
+    handlers = container.remote_mcp_handlers()
     sdk = sessions.sdk_session(active.id)
-    if container.settings.enable_llm_orchestrator and container.settings.openai_api_key:
-        try:
-            reply = await _run_llm(handlers, str(user_id), message, sdk, container.settings.openai_model)
-            return {"session_id": str(active.id), "reply": reply, "authoritative": True, "mode": "llm"}
-        except Exception:
-            # A model outage must not break access to deterministic application data.
-            # Do not expose provider error details or credentials to the user.
-            pass
-    await sdk.add_items([{"role": "user", "content": message}])
-    reply = await _route(handlers, str(user_id), message)
-    await sdk.add_items([{"role": "assistant", "content": reply}])
-    return {"session_id": str(active.id), "reply": reply, "authoritative": True, "mode": "deterministic_fallback"}
+    try:
+        if container.settings.enable_llm_orchestrator and container.settings.openai_api_key:
+            try:
+                reply = await _run_llm(
+                    handlers, str(user_id), message, sdk, container.settings.openai_model
+                )
+                return {"session_id": str(active.id), "reply": reply, "authoritative": True, "mode": "llm"}
+            except McpUnavailableError:
+                return _mcp_unavailable(str(active.id))
+            except Exception:
+                # A model outage must not break access to deterministic application data.
+                # Do not expose provider error details or credentials to the user.
+                pass
+        await sdk.add_items([{"role": "user", "content": message}])
+        reply = await _route(handlers, str(user_id), message)
+        await sdk.add_items([{"role": "assistant", "content": reply}])
+        return {"session_id": str(active.id), "reply": reply, "authoritative": True, "mode": "deterministic_fallback"}
+    except McpUnavailableError:
+        return _mcp_unavailable(str(active.id))
 
 
-async def _run_llm(handlers: McpToolHandlers, user_id: str, message: str, sdk, model: str) -> str:
+def _mcp_unavailable(session_id: str) -> dict:
+    return {
+        "session_id": session_id,
+        "reply": MCP_UNAVAILABLE_MESSAGE,
+        "authoritative": False,
+        "mode": "mcp_unavailable",
+    }
+
+
+async def _run_llm(handlers, user_id: str, message: str, sdk, model: str) -> str:
     from agents import Agent, Runner, function_tool
 
     @function_tool
@@ -134,7 +150,7 @@ async def _run_llm(handlers: McpToolHandlers, user_id: str, message: str, sdk, m
     return reply
 
 
-async def _route(handlers: McpToolHandlers, user_id: str, message: str) -> str:
+async def _route(handlers, user_id: str, message: str) -> str:
     text = message.lower()
     if "hold" in text:
         holdings = await handlers.get_holdings(user_id)

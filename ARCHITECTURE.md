@@ -16,12 +16,14 @@
   `APP_ENV=aws` with the same logical keys). DynamoDB TTL is physical cleanup only; queries still
   apply the configured cutoff.
 - **parsers** — deterministic PyMuPDF parsers.
-- **mcp** — FastMCP Streamable HTTP at `/mcp`. Thin typed wrappers around application services.
-- **agents** — Orchestrator, Document Parsing, ML Analysis, and Eval agents call MCP tools.
+- **mcp** — standalone FastMCP Streamable HTTP process (`/mcp` on port 8001). Thin typed wrappers
+  around application services. Not mounted on FastAPI. Not reachable from the browser or Streamlit.
+- **agents** — Orchestrator, Document Parsing, ML Analysis, and Eval agents in the backend call MCP
+  over `MCP_SERVER_URL` (Compose: `http://mcp:8001/mcp`; AWS sidecar: `http://127.0.0.1:8001/mcp`).
   The Eval agent cannot substitute LLM opinion for a rule. The Orchestrator only reports persisted
-  candidate statuses.
+  candidate statuses. MCP unavailability is fail-closed and cannot skip safety evaluation.
 - **api** — FastAPI health, statements, analyses, paper-order prepare/confirm/refresh, demo sessions,
-  orchestrator sessions. Browser and agents submit only server-issued IDs and the confirmation token.
+  orchestrator sessions. FastAPI does **not** serve `/mcp`. Browser and agents submit only server-issued IDs and the confirmation token.
 - **ui** — Streamlit (separate Compose container). Confirmation requires an unchecked review box and
   a disabled Confirm button until guards pass.
 - **jobs** — CLI wrappers with no financial logic.
@@ -68,8 +70,9 @@ not substitute an order fill, a position average price, or an Alpha Vantage hist
 ## AWS demo (Chapter 6)
 
 See `infrastructure/README.md`. CDK provisions a CIDR-restricted ALB, one public-IP Fargate task
-(no NAT), isolated RDS, S3, DynamoDB, and Secrets Manager. `APP_ENV=aws` selects those adapters.
-`ALLOWED_IPV4_CIDR` is not used locally.
+with FastAPI, FastMCP, and Streamlit containers (no NAT), isolated RDS, S3, DynamoDB, and Secrets
+Manager. MCP listens on task-local `127.0.0.1:8001` and has no ALB listener, target group, or
+security-group ingress. `APP_ENV=aws` selects those adapters. `ALLOWED_IPV4_CIDR` is not used locally.
 
 Inbound WhatsApp is disabled on AWS: Meta cannot call a CIDR-restricted ALB, and the ALB must not
 be opened to `0.0.0.0/0`. The application WhatsApp path remains read-only.

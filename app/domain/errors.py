@@ -45,3 +45,14 @@ class PaperExecutionError(DomainError):
 class SessionAccessError(DomainError):
     def __init__(self, message: str = "Session not found") -> None:
         super().__init__(message, code="SESSION_NOT_FOUND")
+
+
+MCP_UNAVAILABLE_MESSAGE = (
+    "Authoritative financial data is unavailable because the MCP service cannot be reached. "
+    "Safety evaluation cannot be skipped or inferred from conversation memory."
+)
+
+
+class McpUnavailableError(DomainError):
+    def __init__(self, message: str = MCP_UNAVAILABLE_MESSAGE) -> None:
+        super().__init__(message, code="MCP_UNAVAILABLE")

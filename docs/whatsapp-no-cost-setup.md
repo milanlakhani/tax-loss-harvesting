@@ -39,7 +39,7 @@ The temporary access token expires. That is acceptable for a demonstration; obta
 ## 3. Start the application and free HTTPS tunnel
 
 ```powershell
-docker compose up -d backend ui
+docker compose up -d postgres mcp backend ui
 docker compose --profile whatsapp up -d whatsapp-tunnel
 docker compose logs --tail=50 whatsapp-tunnel
 ```

@@ -75,7 +75,7 @@ def test_fargate_assigns_public_ip_in_public_subnets_desired_count_one():
     template.resource_count_is("AWS::EC2::NatGateway", 0)
 
 
-def test_alb_routes_api_mcp_health_to_backend_and_default_to_streamlit():
+def test_alb_routes_api_health_to_backend_and_default_to_streamlit():
     template = _template()
     template.has_resource_properties(
         "AWS::ElasticLoadBalancingV2::ListenerRule",
@@ -87,7 +87,7 @@ def test_alb_routes_api_mcp_health_to_backend_and_default_to_streamlit():
                         {
                             "Field": "path-pattern",
                             "PathPatternConfig": {
-                                "Values": Match.array_with(["/api/*", "/mcp", "/health"])
+                                "Values": Match.array_with(["/api/*", "/health"])
                             },
                         }
                     )
@@ -98,6 +98,16 @@ def test_alb_routes_api_mcp_health_to_backend_and_default_to_streamlit():
     groups = template.find_resources("AWS::ElasticLoadBalancingV2::TargetGroup")
     ports = {props["Properties"]["Port"] for props in groups.values()}
     assert ports == {8000, 8501}
+    for resource in template.find_resources("AWS::ElasticLoadBalancingV2::ListenerRule").values():
+        blob = str(resource)
+        assert "/mcp" not in blob
+    assert 8001 not in {
+        rule.get("FromPort")
+        for resource in template.find_resources("AWS::EC2::SecurityGroup").values()
+        for rule in resource["Properties"].get("SecurityGroupIngress", [])
+    }
+    for resource in template.find_resources("AWS::EC2::SecurityGroupIngress").values():
+        assert resource["Properties"].get("FromPort") != 8001
     health_paths = {props["Properties"]["HealthCheckPath"] for props in groups.values()}
     assert "/health" in health_paths
     assert "/_stcore/health" in health_paths
@@ -263,3 +273,45 @@ def test_migration_task_uses_alembic_and_backend_secrets():
                 assert "OPENAI_API_KEY" in names
     assert found
     template.has_output("MigrationTaskDefinitionArn", Match.any_value())
+
+
+def test_mcp_sidecar_is_task_local_on_port_8001():
+    from stacks.tlh_stack import AWS_MCP_SERVER_URL, MCP_PORT
+
+    template = _template()
+    demo_task = None
+    for resource in template.find_resources("AWS::ECS::TaskDefinition").values():
+        names = {container["Name"] for container in resource["Properties"]["ContainerDefinitions"]}
+        if {"backend", "streamlit", "mcp"} <= names:
+            demo_task = resource
+            break
+    assert demo_task is not None
+    containers = {row["Name"]: row for row in demo_task["Properties"]["ContainerDefinitions"]}
+    mcp = containers["mcp"]
+    backend = containers["backend"]
+    streamlit = containers["streamlit"]
+    assert mcp.get("Essential") is not False
+    assert any(mapping.get("ContainerPort") == MCP_PORT for mapping in mcp.get("PortMappings", []))
+    assert mcp.get("HealthCheck")
+    env = {item["Name"]: item["Value"] for item in backend.get("Environment", [])}
+    assert env.get("MCP_SERVER_URL") == AWS_MCP_SERVER_URL
+    mcp_env = {item["Name"]: item["Value"] for item in mcp.get("Environment", [])}
+    assert "MCP_SERVER_URL" not in mcp_env
+    mcp_secrets = {item["Name"] for item in mcp.get("Secrets", [])}
+    assert "OPENAI_API_KEY" not in mcp_secrets
+    assert "DEMO_SESSION_SIGNING_SECRET" not in mcp_secrets
+    assert "ALPACA_ACCOUNT_1_KEY" in mcp_secrets
+    assert "POSTGRES_PASSWORD" in mcp_secrets
+    streamlit_secrets = {item["Name"] for item in streamlit.get("Secrets", [])}
+    assert "ALPACA_ACCOUNT_1_SECRET" not in streamlit_secrets
+    depends = backend.get("DependsOn") or []
+    assert any(
+        item.get("ContainerName") == "mcp" and item.get("Condition") == "HEALTHY" for item in depends
+    )
+    groups = template.find_resources("AWS::ElasticLoadBalancingV2::TargetGroup")
+    assert 8001 not in {props["Properties"]["Port"] for props in groups.values()}
+    template.resource_count_is("AWS::ECS::Service", 1)
+    template.resource_count_is("AWS::ElasticLoadBalancingV2::LoadBalancer", 1)
+    template.resource_count_is("AWS::EC2::NatGateway", 0)
+    template.has_output("McpInternalUrl", {"Value": AWS_MCP_SERVER_URL})
+

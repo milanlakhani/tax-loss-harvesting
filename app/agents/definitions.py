@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from app.mcp.tools import FORBIDDEN_MCP_TOOLS, MCP_TOOL_NAMES, McpToolHandlers
+from app.mcp.tools import FORBIDDEN_MCP_TOOLS, MCP_TOOL_NAMES
+from app.mcp.urls import AWS_MCP_SERVER_URL, COMPOSE_MCP_SERVER_URL, LOCAL_MCP_SERVER_URL
 
 ORCHESTRATOR_INSTRUCTIONS = """
 You are the Orchestrator Agent. Route questions to MCP tools and explain persisted results.
@@ -25,10 +26,14 @@ def agents_cannot_submit() -> bool:
     return "submit_paper_order" not in MCP_TOOL_NAMES and "submit_paper_order" in FORBIDDEN_MCP_TOOLS
 
 
-def build_agents(handlers: McpToolHandlers):
+def build_agents(*, mcp_server_url: str = LOCAL_MCP_SERVER_URL):
     from agents import Agent
 
-    tools = []  # tools are provided via MCP server, not local Python functions
+    # Tools are provided by the standalone FastMCP server at MCP_SERVER_URL.
+    # The runtime Orchestrator binds demo-session user identity in the backend
+    # and calls that server over Streamable HTTP; it does not expose unbound
+    # MCP tools to the model.
+    tools = []
     parser = Agent(name="Document Parsing Agent", instructions=PARSER_INSTRUCTIONS, tools=tools)
     ml = Agent(name="ML Analysis Agent", instructions=ML_INSTRUCTIONS, tools=tools)
     evaluator = Agent(name="Eval Agent", instructions=EVAL_INSTRUCTIONS, tools=tools)
@@ -38,5 +43,6 @@ def build_agents(handlers: McpToolHandlers):
         tools=tools,
         handoffs=[parser, ml, evaluator],
     )
-    _ = handlers
+    _ = mcp_server_url
+    _ = (AWS_MCP_SERVER_URL, COMPOSE_MCP_SERVER_URL)
     return orchestrator, parser, ml, evaluator

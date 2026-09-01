@@ -1,0 +1,7 @@
+# Explicit local debug overlay. Do not use in AWS.
+# Binds FastMCP only to the loopback interface:
+#   docker compose -f docker-compose.yml -f docker-compose.debug-mcp.yml up --build
+services:
+  mcp:
+    ports:
+      - "127.0.0.1:8001:8001"

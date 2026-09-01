@@ -39,7 +39,9 @@ APP_SECRET_JSON_KEYS = (
 )
 
 BACKEND_PORT = 8000
+MCP_PORT = 8001
 STREAMLIT_PORT = 8501
+AWS_MCP_SERVER_URL = "http://127.0.0.1:8001/mcp"
 
 
 class TaxLossHarvestingStack(Stack):
@@ -220,6 +222,12 @@ class TaxLossHarvestingStack(Stack):
             retention=log_retention,
             removal_policy=removal,
         )
+        mcp_logs = logs.LogGroup(
+            self,
+            "McpLogGroup",
+            retention=log_retention,
+            removal_policy=removal,
+        )
         ui_logs = logs.LogGroup(
             self,
             "StreamlitLogGroup",
@@ -251,6 +259,25 @@ class TaxLossHarvestingStack(Stack):
             "ALPACA_ACCOUNT_2_NAME": "growth-demo",
             "COINGECKO_API_PLAN": "demo",
             "PYTHONUNBUFFERED": "1",
+            "MCP_SERVER_URL": AWS_MCP_SERVER_URL,
+        }
+        mcp_env = {
+            "APP_ENV": "aws",
+            "AWS_REGION": Stack.of(self).region,
+            "AWS_DEFAULT_REGION": Stack.of(self).region,
+            "STATEMENTS_BUCKET": statements.bucket_name,
+            "DYNAMODB_TABLE": windows.table_name,
+            "POSTGRES_HOST": database.instance_endpoint.hostname,
+            "POSTGRES_PORT": "5432",
+            "POSTGRES_DB": "finance",
+            "USE_LIVE_PROVIDERS": "true",
+            "ENABLE_PAPER_ORDERS": "false",
+            "ALPACA_PAPER": "true",
+            "ENABLE_LLM_ORCHESTRATOR": "false",
+            "ALPACA_ACCOUNT_1_NAME": "conservative-demo",
+            "ALPACA_ACCOUNT_2_NAME": "growth-demo",
+            "COINGECKO_API_PLAN": "demo",
+            "PYTHONUNBUFFERED": "1",
         }
         backend_secrets = {
             "OPENAI_API_KEY": ecs.Secret.from_secrets_manager(app_secret, "OPENAI_API_KEY"),
@@ -266,6 +293,44 @@ class TaxLossHarvestingStack(Stack):
             "POSTGRES_USER": ecs.Secret.from_secrets_manager(rds_secret, "username"),
             "POSTGRES_PASSWORD": ecs.Secret.from_secrets_manager(rds_secret, "password"),
         }
+        mcp_secrets = {
+            "ALPHA_VANTAGE_API_KEY": ecs.Secret.from_secrets_manager(app_secret, "ALPHA_VANTAGE_API_KEY"),
+            "COINGECKO_API_KEY": ecs.Secret.from_secrets_manager(app_secret, "COINGECKO_API_KEY"),
+            "ALPACA_ACCOUNT_1_KEY": ecs.Secret.from_secrets_manager(app_secret, "ALPACA_ACCOUNT_1_KEY"),
+            "ALPACA_ACCOUNT_1_SECRET": ecs.Secret.from_secrets_manager(app_secret, "ALPACA_ACCOUNT_1_SECRET"),
+            "ALPACA_ACCOUNT_2_KEY": ecs.Secret.from_secrets_manager(app_secret, "ALPACA_ACCOUNT_2_KEY"),
+            "ALPACA_ACCOUNT_2_SECRET": ecs.Secret.from_secrets_manager(app_secret, "ALPACA_ACCOUNT_2_SECRET"),
+            "POSTGRES_USER": ecs.Secret.from_secrets_manager(rds_secret, "username"),
+            "POSTGRES_PASSWORD": ecs.Secret.from_secrets_manager(rds_secret, "password"),
+        }
+
+        mcp = task.add_container(
+            "mcp",
+            image=image,
+            essential=True,
+            logging=ecs.LogDrivers.aws_logs(stream_prefix="mcp", log_group=mcp_logs),
+            environment=mcp_env,
+            secrets=mcp_secrets,
+            command=[
+                "uvicorn",
+                "app.mcp.asgi:app",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                str(MCP_PORT),
+            ],
+            health_check=ecs.HealthCheck(
+                command=[
+                    "CMD-SHELL",
+                    f"python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:{MCP_PORT}/health')\"",
+                ],
+                interval=Duration.seconds(30),
+                timeout=Duration.seconds(5),
+                retries=3,
+                start_period=Duration.seconds(60),
+            ),
+        )
+        mcp.add_port_mappings(ecs.PortMapping(container_port=MCP_PORT, protocol=ecs.Protocol.TCP))
 
         backend = task.add_container(
             "backend",
@@ -291,6 +356,12 @@ class TaxLossHarvestingStack(Stack):
             ),
         )
         backend.add_port_mappings(ecs.PortMapping(container_port=BACKEND_PORT, protocol=ecs.Protocol.TCP))
+        backend.add_container_dependencies(
+            ecs.ContainerDependency(
+                container=mcp,
+                condition=ecs.ContainerDependencyCondition.HEALTHY,
+            )
+        )
 
         streamlit = task.add_container(
             "streamlit",
@@ -325,6 +396,12 @@ class TaxLossHarvestingStack(Stack):
             ),
         )
         streamlit.add_port_mappings(ecs.PortMapping(container_port=STREAMLIT_PORT, protocol=ecs.Protocol.TCP))
+        streamlit.add_container_dependencies(
+            ecs.ContainerDependency(
+                container=backend,
+                condition=ecs.ContainerDependencyCondition.HEALTHY,
+            )
+        )
 
         statements.grant_read_write(task.task_role)
         windows.grant_read_write_data(task.task_role)
@@ -435,7 +512,7 @@ class TaxLossHarvestingStack(Stack):
             priority=10,
             conditions=[
                 elbv2.ListenerCondition.path_patterns(
-                    ["/api/*", "/mcp", "/mcp/*", "/health", "/health/*"]
+                    ["/api/*", "/health", "/health/*"]
                 )
             ],
         )
@@ -455,6 +532,7 @@ class TaxLossHarvestingStack(Stack):
         CfnOutput(self, "RdsSecretArn", value=rds_secret.secret_arn)
         CfnOutput(self, "MigrationTaskDefinitionArn", value=migration_task.task_definition_arn)
         CfnOutput(self, "TaskSecurityGroupId", value=task_sg.security_group_id)
+        CfnOutput(self, "McpInternalUrl", value=AWS_MCP_SERVER_URL)
         CfnOutput(self, "PublicSubnetIds", value=",".join(public_subnets))
         CfnOutput(self, "IsolatedSubnetIds", value=",".join(isolated_subnets))
         CfnOutput(

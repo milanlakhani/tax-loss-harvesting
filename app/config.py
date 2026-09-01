@@ -82,6 +82,7 @@ class Settings(BaseSettings):
     whatsapp_default_user_id: str = "11111111-1111-4111-8111-111111111111"
     whatsapp_graph_api_version: str = "v23.0"
     whatsapp_graph_api_base_url: str = "https://graph.facebook.com"
+    mcp_server_url: str = "http://127.0.0.1:8001/mcp"
 
     def whatsapp_sender_allowlist(self) -> set[str]:
         return {

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from app.agents.mcp_client import probe_mcp
 from app.container import AppContainer, build_container
 from app.domain.enums import AnalysisTrigger
 from app.domain.errors import ActiveAnalysisExistsError, IdempotencyConflictError
@@ -42,7 +43,15 @@ async def health() -> dict[str, str]:
 async def ready(container: AppContainer = Depends(get_container)) -> dict[str, str]:
     async with container.session_factory() as session:
         await session.execute(text("SELECT 1"))
-    return {"status": "ready"}
+    if not await probe_mcp(container.settings.mcp_server_url):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "unavailable",
+                "reason": "mcp_unreachable",
+            },
+        )
+    return {"status": "ready", "mcp": "ok"}
 
 
 @router.post("/v1/users/{user_id}/analysis", response_model=AnalysisResponse)

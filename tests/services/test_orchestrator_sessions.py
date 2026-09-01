@@ -72,6 +72,9 @@ async def test_orchestrator_turn_always_calls_mcp_for_holdings(session, session_
     from app.providers.fakes import RecordingClock
     from app.services.ingestion import StatementIngestor
 
+    from app.mcp.asgi import create_mcp_app
+    from tests.helpers import UvicornTestServer
+
     providers = build_fake_providers()
     container = AppContainer(
         settings=settings,
@@ -85,8 +88,10 @@ async def test_orchestrator_turn_always_calls_mcp_for_holdings(session, session_
     demo = DemoSessionService(settings, session_factory)
     token_a = await demo.create(USER_A_ID)
     row_a = await demo.resolve(token_a)
-    first = await run_orchestrator_turn(container, user_id=USER_A_ID, demo_session_id=row_a.id, message="holdings")
-    second = await run_orchestrator_turn(container, user_id=USER_A_ID, demo_session_id=row_a.id, message="holdings")
+    async with UvicornTestServer(create_mcp_app(container)) as base:
+        container.settings.mcp_server_url = f"{base}/mcp"
+        first = await run_orchestrator_turn(container, user_id=USER_A_ID, demo_session_id=row_a.id, message="holdings")
+        second = await run_orchestrator_turn(container, user_id=USER_A_ID, demo_session_id=row_a.id, message="holdings")
     assert first["authoritative"] is True and second["authoritative"] is True
     assert first["session_id"] == second["session_id"]
     active = await OrchestratorSessionService(session_factory).get_active(user_id=USER_A_ID, demo_session_id=row_a.id)

@@ -37,6 +37,27 @@ MCP_TOOL_NAMES = (
 
 FORBIDDEN_MCP_TOOLS = ("submit_paper_order", "confirm_paper_order", "prepare_paper_order")
 
+MCP_TOOL_PARAMETERS = {
+    "get_quote": ("canonical_id", "symbol", "asset_type"),
+    "get_holdings": ("user_id",),
+    "get_transactions": ("user_id",),
+    "parse_statement": ("filename", "data_hex"),
+    "run_analysis": ("user_id", "idempotency_key"),
+    "evaluate_candidate": ("candidate_id",),
+    "get_spending_summary": ("user_id",),
+    "get_income_summary": ("user_id",),
+    "get_cashflow_summary": ("user_id",),
+    "compare_spending_periods": ("user_id", "current_start", "current_end", "prior_start", "prior_end"),
+    "get_category_breakdown": ("user_id",),
+    "get_merchant_summary": ("user_id",),
+    "get_largest_transactions": ("user_id",),
+    "get_account_balance_history": ("user_id",),
+    "get_anomalous_transactions": ("user_id",),
+    "get_portfolio_insights": ("user_id",),
+    "get_latest_candidate_decisions": ("user_id",),
+    "get_paper_order_status": ("order_id",),
+}
+
 
 def _json_value(value):
     if is_dataclass(value):

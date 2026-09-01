@@ -25,15 +25,27 @@ docker compose up --build
 
 | Surface | URL |
 | --- | --- |
-| Backend (FastAPI + agents + one FastMCP server) | http://localhost:8000 |
+| Backend (FastAPI + agents only) | http://localhost:8000 |
 | Health | http://localhost:8000/health |
-| Readiness | http://localhost:8000/health/ready |
-| MCP Streamable HTTP | http://localhost:8000/mcp |
+| Readiness (Postgres + MCP) | http://localhost:8000/health/ready |
+| MCP Streamable HTTP (Compose service `mcp`, not published to the host) | `http://mcp:8001/mcp` inside the Compose network |
 | Streamlit UI (separate container) | http://localhost:8501 |
 | PostgreSQL | localhost:5432 user/password/db `finance` |
 
-The backend container runs `alembic upgrade head` then Uvicorn. Streamlit is a **separate** Compose
-service. PostgreSQL is a third service.
+The **mcp** container is the FastMCP Streamable HTTP server (`0.0.0.0:8001`, path `/mcp`). The backend
+does not mount `/mcp`. Agents in the backend are the MCP clients and use
+`MCP_SERVER_URL=http://mcp:8001/mcp`. Streamlit and the browser never call MCP. Port 8001 is not
+published to the host by default. For local inspection only:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.debug-mcp.yml up --build
+```
+
+that overlay binds `127.0.0.1:8001` only.
+
+The backend container runs `alembic upgrade head` then Uvicorn. MCP, Streamlit, and PostgreSQL are
+separate Compose services. Backend liveness is `GET /health` (MCP down does not restart the API in a
+loop). `GET /health/ready` reports MCP unavailability with HTTP 503.
 
 On the host, point `DATABASE_URL` at `localhost` rather than the Compose hostname `postgres`:
 
@@ -50,6 +62,7 @@ docker compose up -d postgres
 alembic upgrade head
 python -m app.jobs.seed
 python -m app.jobs.run_analysis --all-users
+uvicorn app.mcp.asgi:app --host 127.0.0.1 --port 8001
 uvicorn app.main:app --reload --port 8000
 streamlit run app/ui/streamlit_app.py --server.port 8501
 ```

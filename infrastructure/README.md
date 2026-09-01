@@ -5,7 +5,11 @@ production topology. The Fargate task runs in **public subnets with `assign_publ
 demo can reach OpenAI, Alpaca, Alpha Vantage, CoinGecko, Frankfurter, ECR, and AWS APIs **without a
 NAT Gateway**. That public task IP is a cost-saving demo choice, not a production recommendation.
 
-Local `APP_ENV=local` and Docker Compose are unchanged. `ALLOWED_IPV4_CIDR` is AWS/CDK-only.
+Local `APP_ENV=local` and Docker Compose do not require AWS credentials or `ALLOWED_IPV4_CIDR`.
+Compose runs FastAPI, FastMCP, Streamlit, and PostgreSQL as **four** services. MCP is not published
+to the host unless `docker-compose.debug-mcp.yml` is explicitly enabled.
+
+`ALLOWED_IPV4_CIDR` is AWS/CDK-only.
 
 ## What is provisioned
 
@@ -17,9 +21,11 @@ Local `APP_ENV=local` and Docker Compose are unchanged. `ALLOWED_IPV4_CIDR` is A
 - DynamoDB on-demand table (`pk`/`sk`, TTL attribute `ttl`) for rolling windows
 - Secrets Manager application secret (JSON keys only) plus the RDS-generated secret
 - ECS cluster, one Fargate service, desired count 1
-- Backend (FastAPI `:8000`) and Streamlit (`:8501`) in the **same** task definition
+- Backend (FastAPI `:8000`), FastMCP sidecar (`:8001`), and Streamlit (`:8501`) in the **same** task definition
 - Public ALB whose inbound HTTP rule is restricted to `ALLOWED_IPV4_CIDR` (never `0.0.0.0/0` by default)
-- Target groups: `/api/*`, `/mcp`, `/mcp/*`, `/health`, `/health/*` → FastAPI; default → Streamlit
+- Target groups: `/api/*`, `/health`, `/health/*` → FastAPI; default → Streamlit
+- MCP is **not** on the ALB: no listener, target group, or public security-group ingress for port 8001
+- Backend reaches MCP at `MCP_SERVER_URL=http://127.0.0.1:8001/mcp` (task-local sidecar)
 - Streamlit target-group stickiness and a 400s ALB idle timeout for WebSocket traffic
 - CloudWatch log groups with 14-day retention
 - Least-privilege task IAM for this bucket, table, and the two secrets
@@ -32,6 +38,9 @@ The task security group allows:
 - outbound PostgreSQL `5432` only to the RDS security group
 - outbound HTTPS `443` for providers, AWS APIs, and image pulls
 - outbound DNS `53` for the VPC resolver
+
+Port 8001 is reachable only inside the task network namespace (`127.0.0.1`). Do not add ALB or
+security-group ingress for MCP.
 
 Do not describe this as “ECS-to-RDS only”. Provider HTTPS and AWS control-plane access are required.
 
@@ -75,8 +84,10 @@ Frankfurter needs no secret. Database username/password come from the **RDS-gene
 Never put values in CDK code, `cdk.json`, context, CloudFormation outputs, images, logs, or git.
 Copy `app-secret.example.json` to `app-secret.json` (gitignored) and edit locally.
 
-Provider keys are injected only into the backend and migration containers. Streamlit receives
-`BACKEND_URL=http://127.0.0.1:8000` only.
+Provider keys needed by approved MCP tools (quotes, analysis, statement parse) are injected into the
+backend **and** MCP containers. OpenAI and demo-session signing secrets stay on the backend only.
+Streamlit receives `BACKEND_URL=http://127.0.0.1:8000` only. MCP receives no `MCP_SERVER_URL` (it is
+the server). The backend receives `MCP_SERVER_URL=http://127.0.0.1:8001/mcp`.
 
 ## Charges while deployed
 
@@ -222,7 +233,8 @@ curl -I http://LOAD_BALANCER_DNS/api/
 ```
 
 Open `http://LOAD_BALANCER_DNS/` in a browser. Streamlit WebSockets use the same origin through the
-ALB (sticky UI target group, 400s idle timeout). FastAPI remains on `/health` and `/api/*`.
+ALB (sticky UI target group, 400s idle timeout). FastAPI remains on `/health` and `/api/*`. There is
+no public `/mcp` route; MCP is task-local on port 8001.
 
 ### 10. Logs
 
@@ -233,7 +245,7 @@ aws logs tail /aws/ecs/BackendLogGroup --follow
 ```
 
 Use the log group names from the deployed stack (CloudFormation resources `BackendLogGroup`,
-`StreamlitLogGroup`, `MigrationLogGroup`). Do not expect secrets to appear in logs; do not print them.
+`McpLogGroup`, `StreamlitLogGroup`, `MigrationLogGroup`). Do not expect secrets to appear in logs; do not print them.
 
 ### 11. Destroy (demo only — deletes data)
 
