@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,23 +9,27 @@ import pytest
 import respx
 
 from app.adapters.memory_window_store import InMemoryRollingWindowStore
+from app.adapters.rolling_window import price_window_key, quote_key
+from app.adapters.window_sync import WindowSyncService
 from app.providers.alpha_vantage import AlphaVantageProvider
 from app.providers.alpaca import ALPACA_PAPER_FORCED, AlpacaProvider
 from app.providers.alpaca_market_data import AlpacaMarketDataProvider
 from app.providers.coingecko import CoinGeckoProvider
-from app.providers.fakes import FakeCryptoQuoteProvider, FakeEquityQuoteProvider, FakeExecutionProvider, FakeFxProvider, RecordingClock
+from app.providers.fakes import (
+    FakeCryptoQuoteProvider,
+    FakeEquityQuoteProvider,
+    FakeExecutionProvider,
+    FakeFxProvider,
+    RecordingClock,
+)
 from app.providers.frankfurter import FrankfurterProvider
 from app.providers.http_util import HttpJsonClient
 from app.providers.mappings import COINGECKO_IDS
-from app.providers.protocols import ProviderRouter
-
-
-def _client():
-    return httpx.AsyncClient()
+from app.providers.protocols import PriceObservation, ProviderRouter, Quote
 
 
 @pytest.mark.unit
-def test_router_sends_equity_to_alpha_crypto_to_coingecko_fx_to_frankfurter():
+def test_router_exposes_configured_adapters():
     equity = FakeEquityQuoteProvider()
     crypto = FakeCryptoQuoteProvider()
     fx = FakeFxProvider()
@@ -159,10 +163,14 @@ async def test_alpaca_normalizes_crypto_position_symbols_at_provider_boundary():
 
 
 @pytest.mark.unit
-async def test_alpaca_market_data_preserves_trade_timestamp_and_delegates_history():
+async def test_alpaca_market_data_records_iex_feed_and_delegates_history_to_alpha_vantage():
+    from alpaca.data.enums import DataFeed
+
     source_time = datetime(2026, 8, 31, 14, 35, tzinfo=UTC)
     history = MagicMock()
+    history.provider_name = "alpha-vantage"
     history.get_price_history = AsyncMock(return_value=[])
+    history.get_quote = AsyncMock()
     with patch("app.providers.alpaca_market_data.StockHistoricalDataClient") as client_type:
         client_type.return_value.get_stock_latest_trade.return_value = {
             "QQQ": MagicMock(price=401.25, timestamp=source_time)
@@ -171,18 +179,67 @@ async def test_alpaca_market_data_preserves_trade_timestamp_and_delegates_histor
         quote = await provider.get_quote("ETF:QQQ", "QQQ", source_time)
         observations = await provider.get_price_history("ETF:QQQ", "QQQ", source_time, source_time)
 
+    request = client_type.return_value.get_stock_latest_trade.call_args.args[0]
+    assert request.feed is DataFeed.IEX
     assert quote is not None
     assert quote.price == Decimal("401.25")
     assert quote.source_timestamp == source_time
     assert quote.provider == "alpaca-market-data"
+    assert quote.feed == "iex"
     assert quote.retrieved_at != quote.source_timestamp
+    assert quote.freshness_seconds == (quote.retrieved_at - quote.source_timestamp).total_seconds()
+    assert quote.provenance()["quote_feed"] == "iex"
     assert observations == []
     history.get_price_history.assert_awaited_once_with("ETF:QQQ", "QQQ", source_time, source_time)
+    history.get_quote.assert_not_called()
 
 
 @pytest.mark.unit
-async def test_alpaca_market_data_fails_closed_when_latest_trade_is_missing():
+async def test_alpaca_market_data_can_request_sip_feed_explicitly():
+    from alpaca.data.enums import DataFeed
+
+    source_time = datetime(2026, 8, 31, 14, 35, tzinfo=UTC)
     history = MagicMock()
+    history.get_price_history = AsyncMock(return_value=[])
+    with patch("app.providers.alpaca_market_data.StockHistoricalDataClient") as client_type:
+        client_type.return_value.get_stock_latest_trade.return_value = {
+            "VTI": MagicMock(price=200.5, timestamp=source_time)
+        }
+        provider = AlpacaMarketDataProvider("key", "secret", history=history, feed="sip")
+        quote = await provider.get_quote("ETF:VTI", "VTI", source_time)
+
+    request = client_type.return_value.get_stock_latest_trade.call_args.args[0]
+    assert request.feed is DataFeed.SIP
+    assert quote.feed == "sip"
+
+
+@pytest.mark.unit
+async def test_alpaca_market_data_fails_closed_without_using_history_fill_or_average():
+    history = MagicMock()
+    history.get_quote = AsyncMock(
+        return_value=Quote(
+            canonical_id="ETF:QQQ",
+            price=Decimal("999.00"),
+            currency="USD",
+            provider="alpha-vantage",
+            provider_asset_id="QQQ",
+            source_timestamp=datetime(2026, 8, 30, tzinfo=UTC),
+            retrieved_at=datetime(2026, 8, 31, tzinfo=UTC),
+            is_mocked=False,
+        )
+    )
+    history.get_price_history = AsyncMock(
+        return_value=[
+            PriceObservation(
+                canonical_id="ETF:QQQ",
+                currency="USD",
+                price=Decimal("888.00"),
+                observed_at=datetime(2026, 8, 30, tzinfo=UTC),
+                provider="alpha-vantage",
+                is_mocked=False,
+            )
+        ]
+    )
     with patch("app.providers.alpaca_market_data.StockHistoricalDataClient") as client_type:
         client_type.return_value.get_stock_latest_trade.return_value = {}
         provider = AlpacaMarketDataProvider("key", "secret", history=history)
@@ -190,3 +247,135 @@ async def test_alpaca_market_data_fails_closed_when_latest_trade_is_missing():
 
         with pytest.raises(ProviderError, match="latest trade unavailable"):
             await provider.get_quote("ETF:QQQ", "QQQ", datetime(2026, 8, 31, tzinfo=UTC))
+    history.get_quote.assert_not_called()
+    history.get_price_history.assert_not_called()
+
+
+@pytest.mark.unit
+def test_live_router_splits_equity_quote_history_crypto_fx_and_execution():
+    from app.config import Settings
+    from app.providers.live import build_live_providers
+
+    settings = Settings(
+        use_live_providers=True,
+        alpha_vantage_api_key="av-key",
+        coingecko_api_key="cg-key",
+        alpaca_account_1_key="key",
+        alpaca_account_1_secret="secret",
+        alpaca_market_data_feed="iex",
+    )
+    with (
+        patch("app.providers.alpaca_market_data.StockHistoricalDataClient"),
+        patch("app.providers.alpaca.TradingClient"),
+    ):
+        router = build_live_providers(settings)
+    assert isinstance(router.equity, AlpacaMarketDataProvider)
+    assert router.equity.provider_name == "alpaca-market-data"
+    assert router.equity.feed == "iex"
+    assert isinstance(router.equity._history, AlphaVantageProvider)
+    assert router.equity._history.provider_name == "alpha-vantage"
+    assert isinstance(router.crypto, CoinGeckoProvider)
+    assert router.crypto.provider_name == "coingecko"
+    assert isinstance(router.fx, FrankfurterProvider)
+    assert router.fx.provider_name == "frankfurter"
+    assert isinstance(router.execution, AlpacaProvider)
+
+
+@pytest.mark.unit
+async def test_window_sync_keeps_alpaca_current_quote_separate_from_alpha_vantage_history():
+    source_time = datetime(2026, 8, 31, 14, 35, tzinfo=UTC)
+    history = MagicMock()
+    history.get_price_history = AsyncMock(
+        return_value=[
+            PriceObservation(
+                canonical_id="ETF:QQQ",
+                currency="USD",
+                price=Decimal("390.00"),
+                observed_at=datetime(2026, 8, 29, tzinfo=UTC),
+                provider="alpha-vantage",
+                is_mocked=False,
+            )
+        ]
+    )
+    history.get_quote = AsyncMock()
+    clock = RecordingClock(datetime(2026, 8, 31, 15, 0, tzinfo=UTC))
+    store = InMemoryRollingWindowStore(clock)
+    with patch("app.providers.alpaca_market_data.StockHistoricalDataClient") as client_type:
+        client_type.return_value.get_stock_latest_trade.return_value = {
+            "QQQ": MagicMock(price=401.25, timestamp=source_time)
+        }
+        equity = AlpacaMarketDataProvider("key", "secret", history=history, feed="iex")
+        router = ProviderRouter(
+            equity=equity,
+            crypto=FakeCryptoQuoteProvider(),
+            fx=FakeFxProvider(),
+            execution=FakeExecutionProvider(),
+        )
+        await WindowSyncService(store, router).sync_price_window(
+            canonical_id="ETF:QQQ",
+            symbol="QQQ",
+            currency="USD",
+            asset_type="ETF",
+            as_of=clock.now(),
+            window_days=8,
+            overlap=timedelta(hours=24),
+            now=clock.now(),
+        )
+    current = await store.get_observations(quote_key("ETF:QQQ", "USD"))
+    window = await store.get_observations(price_window_key("ETF:QQQ", "USD"))
+    assert len(current) == 1
+    assert current[0].provider == "alpaca-market-data"
+    assert current[0].payload["feed"] == "iex"
+    assert current[0].payload["price"] == "401.25"
+    assert current[0].payload["source_timestamp"]
+    assert current[0].payload["retrieved_at"]
+    assert current[0].payload["freshness"] is not None
+    assert all(row.provider == "alpha-vantage" for row in window)
+    assert window[0].payload["price"] == "390.00"
+    history.get_quote.assert_not_called()
+
+
+@pytest.mark.unit
+async def test_window_sync_does_not_copy_history_close_into_current_when_quote_missing():
+    class HistoryOnlyEquity(FakeEquityQuoteProvider):
+        async def get_quote(self, canonical_id: str, symbol: str, as_of: datetime) -> Quote | None:
+            self.calls.append(("quote", canonical_id))
+            return None
+
+    clock = RecordingClock(datetime(2024, 6, 10, tzinfo=UTC))
+    equity = HistoryOnlyEquity()
+    equity.seed_history(
+        "ETF:VTI",
+        [
+            PriceObservation(
+                canonical_id="ETF:VTI",
+                currency="USD",
+                price=Decimal("200"),
+                observed_at=datetime(2024, 6, 9, tzinfo=UTC),
+                provider="fake-alpha-vantage",
+                is_mocked=True,
+            )
+        ],
+    )
+    store = InMemoryRollingWindowStore(clock)
+    await WindowSyncService(
+        store,
+        ProviderRouter(
+            equity=equity,
+            crypto=FakeCryptoQuoteProvider(),
+            fx=FakeFxProvider(),
+            execution=FakeExecutionProvider(),
+        ),
+    ).sync_price_window(
+        canonical_id="ETF:VTI",
+        symbol="VTI",
+        currency="USD",
+        asset_type="ETF",
+        as_of=clock.now(),
+        window_days=8,
+        overlap=timedelta(hours=24),
+        now=clock.now(),
+    )
+    assert await store.get_observations(quote_key("ETF:VTI", "USD")) == []
+    window = await store.get_observations(price_window_key("ETF:VTI", "USD"))
+    assert window and window[0].payload["price"] == "200"

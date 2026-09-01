@@ -81,14 +81,18 @@ Replacement BUY suggestions are display-only and are never submitted.
 | Data | Owner |
 | --- | --- |
 | Tax lots, evaluations, candidate status | PostgreSQL application services |
-| EQUITY / ETF quotes and history | Alpha Vantage |
-| CRYPTO quotes and history | CoinGecko (explicit IDs, e.g. BTC/USD → bitcoin) |
+| EQUITY / ETF current quotes | Alpaca Market Data (`iex` by default; `sip`, `delayed_sip`, or `otc` if configured) |
+| EQUITY / ETF historical price windows | Alpha Vantage (returns, volatility, drawdown, rapid-decline) |
+| CRYPTO current and historical prices | CoinGecko (explicit IDs, e.g. BTC/USD → bitcoin) |
 | FX conversion | Frankfurter (no API key; weekend uses last earlier valid date) |
-| Paper holdings, tradability, orders, fills | Alpaca paper API (`TradingClient(..., paper=True)` always) |
+| Paper holdings, quantities, tradability, orders, fills | Alpaca Trading (`TradingClient(..., paper=True)` always) |
 | Rolling windows | `RollingWindowStore`: PostgreSQL when `APP_ENV=local`; DynamoDB when `APP_ENV=aws` |
 
-Alpaca never replaces Alpha Vantage, CoinGecko, or Frankfurter for reference prices. Fill prices
-from Alpaca are stored separately from evaluation reference quotes.
+Current EQUITY/ETF quotes come from Alpaca Market Data, not Alpha Vantage. That quote is stored
+with provider, feed, source timestamp, retrieval timestamp, and freshness. An Alpaca **fill**
+(`fill_price` on `paper_orders`) is a separate record from the Alpaca **market quote** used as
+the evaluation/reference price. Missing current quotes fail closed: the application does not
+substitute a fill, a position average, or an Alpha Vantage historical close.
 
 Paper-account seed purchases are recorded as `PAPER_MIRROR_SETUP` and are never imported into the
 synthetic tax ledger.
@@ -115,6 +119,7 @@ capped at 200 items. Credentials, secrets, and PDF bytes are not stored.
 
 ```bash
 python -m app.verify_integrations --provider alpha-vantage
+python -m app.verify_integrations --provider alpaca-market-data
 python -m app.verify_integrations --provider coingecko
 python -m app.verify_integrations --provider frankfurter
 python -m app.verify_integrations --provider alpaca --account conservative-demo
@@ -134,6 +139,12 @@ recorded as `PAPER_MIRROR_SETUP`. Disable paper orders again after the demonstra
 
 See `.env.example`. Do not commit `.env`. Harvesting target is an educational ranking target, not a
 complete tax return. The 30-day crypto repurchase window is project policy, not tax law.
+
+## AWS deployment
+
+See [infrastructure/README.md](infrastructure/README.md). `ALLOWED_IPV4_CIDR` is required for CDK
+only; local Compose does not use it. Inbound WhatsApp is disabled on AWS because the ALB stays
+CIDR-restricted.
 
 ## Layout
 

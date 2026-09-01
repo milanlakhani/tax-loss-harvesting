@@ -37,5 +37,12 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
+# CDK
+infrastructure/cdk.out/
+infrastructure/.venv/
+cdk.context.json
+infrastructure/cdk.context.json
+infrastructure/app-secret.json
+
 # Alembic bytecode
 alembic/versions/__pycache__/

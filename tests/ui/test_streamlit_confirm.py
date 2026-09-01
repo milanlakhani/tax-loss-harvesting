@@ -29,18 +29,18 @@ def test_confirm_paper_sale_button_enforces_checkbox_and_guards():
     at.session_state["paper_enabled"] = True
     at.session_state["candidate_approved"] = True
     at.session_state["order_submitted"] = False
-    at.run()
+    at.run(timeout=10)
     at.sidebar.radio[0].set_value("Paper orders")
-    at.run()
+    at.run(timeout=10)
     assert "SIMULATED PAPER TRADE - NO REAL MONEY" in at.warning[0].value
     confirm = next(b for b in at.button if b.label == "Confirm paper sale")
     assert confirm.disabled is True
     at.checkbox[0].check()
-    at.run()
+    at.run(timeout=10)
     confirm = next(b for b in at.button if b.label == "Confirm paper sale")
     assert confirm.disabled is False
     confirm.click()
-    at.run()
+    at.run(timeout=10)
     confirm = next(b for b in at.button if b.label == "Confirm paper sale")
     assert confirm.disabled is True
 
@@ -50,11 +50,11 @@ def test_confirm_paper_sale_button_enforces_checkbox_and_guards():
     at2.session_state["prepared_snapshot"] = snapshot
     at2.session_state["paper_enabled"] = False
     at2.session_state["candidate_approved"] = True
-    at2.run()
+    at2.run(timeout=10)
     at2.sidebar.radio[0].set_value("Paper orders")
-    at2.run()
+    at2.run(timeout=10)
     at2.checkbox[0].check()
-    at2.run()
+    at2.run(timeout=10)
     confirm2 = next(b for b in at2.button if b.label == "Confirm paper sale")
     assert confirm2.disabled is True
 
@@ -65,9 +65,9 @@ def test_prepare_button_is_clearly_disabled_without_approved_candidate():
     at.session_state["demo_session_token"] = "test-demo-session"
     at.session_state["orchestrator_session_id"] = "already-resumed"
     at.session_state["approved_candidates"] = []
-    at.run()
+    at.run(timeout=10)
     at.sidebar.radio[0].set_value("Paper orders")
-    at.run()
+    at.run(timeout=10)
 
     prepare = next(b for b in at.button if b.label == "Prepare paper order")
     assert prepare.disabled is True

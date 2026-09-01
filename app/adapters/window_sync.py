@@ -78,10 +78,13 @@ class WindowSyncService:
             {
                 "price": str(quote.price),
                 "provider": quote.provider,
+                "feed": quote.feed,
                 "provider_asset_id": quote.provider_asset_id,
                 "is_mocked": quote.is_mocked,
                 "tradable": quote.tradable,
                 "source_timestamp": quote.source_timestamp.isoformat(),
+                "retrieved_at": quote.retrieved_at.isoformat(),
+                "freshness": quote.freshness_seconds,
             },
             provider=quote.provider,
             source_timestamp=quote.source_timestamp,

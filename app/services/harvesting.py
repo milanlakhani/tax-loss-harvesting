@@ -234,6 +234,7 @@ class HarvestingService:
             total_loss=total_loss,
             quote=quote.price if quote else None,
             quote_provider=quote.provider if quote else None,
+            extra=quote.provenance() if quote else None,
             basis=lot.remaining_basis,
             replacement_canonical_id=replacement[0] if replacement else None,
             estimated_cost=(quote.price * Decimal("0.0005") * lot.remaining_quantity) if quote else None,

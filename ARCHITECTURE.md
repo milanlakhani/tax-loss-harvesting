@@ -7,10 +7,14 @@
   conflicts, portfolio math, `PaperExecutionService`, `OrchestratorSessionService`, `DemoSessionService`,
   `AlpacaSyncService`. Only `PaperExecutionService` may prepare or submit an Alpaca paper SELL.
 - **persistence** — SQLAlchemy 2 models, async engine, Alembic migrations.
-- **providers** — protocols plus fakes and live adapters (`AlphaVantageProvider`, `CoinGeckoProvider`,
-  `FrankfurterProvider`, `AlpacaProvider`). Adapters normalize quotes/FX; they do not implement gates.
-- **adapters** — statement storage and `RollingWindowStore` (PostgreSQL local, in-memory fake,
-  DynamoDB for `APP_ENV=aws` with the same logical keys).
+- **providers** — protocols plus fakes and live adapters (`AlpacaMarketDataProvider` for current
+  EQUITY/ETF quotes, `AlphaVantageProvider` for EQUITY/ETF history, `CoinGeckoProvider`,
+  `FrankfurterProvider`, `AlpacaProvider` for trading). Adapters normalize quotes/FX; they do not
+  implement gates.
+- **adapters** — statement storage (`LocalStatementStorage` for `APP_ENV=local`, `S3StatementStorage`
+  for `APP_ENV=aws`) and `RollingWindowStore` (PostgreSQL local, in-memory fake, DynamoDB for
+  `APP_ENV=aws` with the same logical keys). DynamoDB TTL is physical cleanup only; queries still
+  apply the configured cutoff.
 - **parsers** — deterministic PyMuPDF parsers.
 - **mcp** — FastMCP Streamable HTTP at `/mcp`. Thin typed wrappers around application services.
 - **agents** — Orchestrator, Document Parsing, ML Analysis, and Eval agents call MCP tools.
@@ -47,10 +51,31 @@ Metadata does not advance on a failed or partial refresh. Analysis consumes stor
 
 ## Provider routing
 
-- EQUITY / ETF → Alpha Vantage
-- CRYPTO → CoinGecko (explicit IDs only)
-- FX → Frankfurter
-- Paper holdings / orders / fills → Alpaca (`paper=True` is a forced constant, never request-derived)
+- EQUITY / ETF **current quotes** → Alpaca Market Data (`alpaca-market-data`, feed `iex` by default;
+  configurable `sip` / `delayed_sip` / `otc`). Stored with provider, feed, source timestamp,
+  retrieval timestamp, and freshness.
+- EQUITY / ETF **historical windows** → Alpha Vantage (`TIME_SERIES_DAILY` closes). Used for
+  returns, volatility, drawdown, and rapid-decline analysis. Never used as a substitute current quote.
+- CRYPTO current and historical prices → CoinGecko (explicit IDs only; API key mandatory in AWS)
+- FX → Frankfurter (no API key)
+- Paper holdings, quantities, orders, and **fills** → Alpaca Trading (`paper=True` is a forced
+  constant). Fill prices are stored on `paper_orders.fill_price`, separately from the Alpaca
+  market-data quote used as `reference_price` / `quote_provider`.
+
+A missing current quote fails closed (`UNAVAILABLE_QUOTE` / `STALE_QUOTE`). The application does
+not substitute an order fill, a position average price, or an Alpha Vantage historical close.
+
+## AWS demo (Chapter 6)
+
+See `infrastructure/README.md`. CDK provisions a CIDR-restricted ALB, one public-IP Fargate task
+(no NAT), isolated RDS, S3, DynamoDB, and Secrets Manager. `APP_ENV=aws` selects those adapters.
+`ALLOWED_IPV4_CIDR` is not used locally.
+
+Inbound WhatsApp is disabled on AWS: Meta cannot call a CIDR-restricted ALB, and the ALB must not
+be opened to `0.0.0.0/0`. The application WhatsApp path remains read-only.
+
+The public task IP is a cost-saving demo choice, not a production recommendation. Task egress is
+PostgreSQL to RDS, HTTPS to providers/AWS APIs/ECR, and DNS — not “ECS-to-RDS only”.
 
 ## Orchestrator sessions vs demo sessions
 

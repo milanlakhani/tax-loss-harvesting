@@ -36,7 +36,7 @@ Status is complete only when the behavior is implemented and covered by tests, n
 | Reject scanned PDFs / unknown / malformed with stable codes; no partial DB write | `ParseErrorCode`; ingest transaction | `test_rejects_scanned_insufficient_text`; ingest rollback |
 | Source page + parsing confidence per row | parsed rows / `BankTransaction` | bank parser test |
 | Duplicate statement/transaction IDs idempotent | ingest existing lookup | `test_ingest_is_idempotent_and_rolls_back_on_parse_error` |
-| Uploads via storage interface in gitignored `local-data` | `LocalStatementStorage`, `.gitignore` | ingest saves files |
+| Uploads via storage interface in gitignored `local-data` | `LocalStatementStorage`; S3 when `APP_ENV=aws` | ingest saves files; `test_s3_storage_round_trip_and_uri` |
 | PDF generator is demo-only, not API/MCP/UI | `app/demo_data/` | no generation route in FastAPI |
 | Bank txn storage fields including original amount/ccy never overwritten; FX metadata | `BankTransaction` + ingest | `test_original_amount_not_replaced_for_fx` |
 | Deterministic query services (spending, income, cash-flow, comparison, category, merchant, largest, balances, anomalies via scores) | `app/services/statistics.py` | `tests/services/test_statistics.py` |
@@ -84,6 +84,9 @@ Status is complete only when the behavior is implemented and covered by tests, n
 | Pinned OpenAI Agents SDK, FastMCP, Streamlit, alpaca-py, httpx | `requirements.txt` | install + imports |
 | Streamlit in a separate Compose service; FastAPI+agents+MCP in backend; Postgres separate | `docker-compose.yml` | compose file |
 | Live adapters behind Phase 1 protocols; Alpaca `paper=True` forced | `app/providers/*.py`, `ALPACA_PAPER_FORCED` | `tests/providers/test_live_adapters.py` |
+| EQUITY/ETF current quotes from Alpaca Market Data (`iex` default); history from Alpha Vantage | `AlpacaMarketDataProvider`, `build_live_providers` | `test_live_router_splits_*`, `test_alpaca_market_data_records_iex_feed_*` |
+| Record quote provider, feed, source/retrieval timestamps, freshness; never substitute fill/avg/AV close | `Quote.provenance`, window CURRENT, evaluation `extra`, paper snapshot | `test_window_sync_keeps_alpaca_current_*`, `test_alpaca_market_data_fails_closed_without_using_history_*` |
+| Alpaca market quote vs Alpaca fill stored separately | `reference_price` / `quote_provider` vs `paper_orders.fill_price` | `test_prepare_confirm_and_guardrails` |
 | Named paper accounts; reject submit unless `ENABLE_PAPER_ORDERS=true`; idempotent client order IDs | `AlpacaProvider`, `PaperExecutionService` | paper execution tests |
 | Seed purchases `PAPER_MIRROR_SETUP`; never tax lots | `AlpacaSyncService` | `test_alpaca_sync.py` |
 | Alpha Vantage key on every request; stale/429/timeout/malformed fallback | `AlphaVantageProvider` | live adapter tests |
@@ -103,3 +106,18 @@ Status is complete only when the behavior is implemented and covered by tests, n
 | Streamlit pages + confirmation checkbox/button rules | `app/ui/streamlit_app.py`, `confirm_state.py` | AppTest + confirm_state unit |
 | `python -m app.verify_integrations` | `app/verify_integrations.py` | module argparse (manual live checks) |
 | Tests mock HTTP/SDK; no live Alpaca from request | `BlockedSocket`, respx, TradingClient patch | conftest + provider tests |
+
+## Phase 3 / AWS
+
+| Requirement | Implementation | Tests |
+| --- | --- | --- |
+| Separate pinned CDK v2 Python project | `infrastructure/` | `infrastructure/tests/test_stack.py` |
+| VPC 2 AZ, public ALB+task, isolated RDS, no NAT, S3/DDB gateway endpoints | `stacks/tlh_stack.py` | template assertions |
+| CIDR-restricted ALB; fail synth on blank/`0.0.0.0/0` | `stacks/cidr.py` | `test_require_allowed_cidr_*` |
+| Fargate public IP, desired count 1, dual containers/target groups | ECS+ALB in stack | routing + AssignPublicIp tests |
+| Secrets Manager JSON keys; RDS-generated DB secret; no plaintext keys | app secret + ECS secrets | template scan |
+| DynamoDB pk/sk, on-demand, TTL; S3 encrypted + blocked public | stack table/bucket | template tests |
+| APP_ENV=aws S3 + DynamoDB + optional SM overlay; local unchanged | `s3_storage`, `secrets`, `live.build_window_store` | `test_aws_adapters.py` |
+| Shared rolling-window semantics | DynamoDB emulator + memory/Postgres | `test_window_postgres.py`, `test_aws_adapters.py` |
+| Demo destroy vs retain production-named env | `destroy_compatible` | removal-policy tests |
+| WhatsApp not public on AWS | no 0.0.0.0/0; WhatsApp secrets omitted | template + README |

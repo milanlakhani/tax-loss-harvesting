@@ -28,6 +28,7 @@ class Quote:
         stale: bool = False,
         asset_type: str | None = None,
         symbol: str | None = None,
+        feed: str | None = None,
     ) -> None:
         self.canonical_id = canonical_id
         self.price = price
@@ -41,6 +42,20 @@ class Quote:
         self.stale = stale
         self.asset_type = asset_type
         self.symbol = symbol
+        self.feed = feed
+
+    @property
+    def freshness_seconds(self) -> float:
+        return (self.retrieved_at - self.source_timestamp).total_seconds()
+
+    def provenance(self) -> dict[str, str | float | None]:
+        return {
+            "quote_provider": self.provider,
+            "quote_feed": self.feed,
+            "quote_source_timestamp": self.source_timestamp.isoformat(),
+            "quote_retrieved_at": self.retrieved_at.isoformat(),
+            "quote_freshness_seconds": self.freshness_seconds,
+        }
 
 
 class FxRate:

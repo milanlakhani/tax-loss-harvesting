@@ -26,7 +26,7 @@ def get_engine(settings: Settings | None = None):
     global _engine
     if _engine is None:
         settings = settings or get_settings()
-        _engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+        _engine = create_async_engine(settings.effective_database_url, pool_pre_ping=True)
     return _engine
 
 

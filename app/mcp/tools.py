@@ -78,7 +78,10 @@ class McpToolHandlers:
             "price": str(quote.price),
             "currency": quote.currency,
             "provider": quote.provider,
-            "as_of": quote.source_timestamp.isoformat(),
+            "feed": quote.feed,
+            "source_timestamp": quote.source_timestamp.isoformat(),
+            "retrieved_at": quote.retrieved_at.isoformat(),
+            "freshness_seconds": quote.freshness_seconds,
             "stale": quote.stale,
         }
 

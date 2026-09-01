@@ -84,12 +84,16 @@ def settings(tmp_path) -> Settings:
 
 @pytest_asyncio.fixture
 async def db_engine(settings, blocked_live_network):
+    from sqlalchemy import text
+
     engine = create_async_engine(settings.database_url, pool_pre_ping=True)
     async with engine.begin() as conn:
+        await conn.execute(text("SELECT pg_advisory_xact_lock(8675309)"))
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     yield engine
     async with engine.begin() as conn:
+        await conn.execute(text("SELECT pg_advisory_xact_lock(8675309)"))
         await conn.run_sync(Base.metadata.drop_all)
     await engine.dispose()
 

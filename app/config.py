@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     coingecko_api_plan: str = "demo"
     coingecko_api_base_url: str = "https://api.coingecko.com/api/v3"
     alpaca_paper: bool = True
+    alpaca_market_data_feed: str = "iex"
     enable_paper_orders: bool = False
     use_live_providers: bool = False
     alpaca_account_1_name: str = "conservative-demo"
@@ -61,6 +62,14 @@ class Settings(BaseSettings):
     alpaca_account_2_secret: str | None = None
     dynamodb_table: str = "finance-rolling-windows"
     aws_region: str = "eu-west-2"
+    statements_bucket: str | None = None
+    postgres_host: str | None = None
+    postgres_user: str | None = None
+    postgres_password: str | None = None
+    postgres_db: str = "finance"
+    postgres_port: int = 5432
+    app_secret_arn: str | None = None
+    window_ttl_days: int = 180
     paper_prep_ttl_seconds: int = 300
     backend_public_url: str = "http://localhost:8000"
     demo_session_signing_secret: str = "change-me"
@@ -96,6 +105,19 @@ class Settings(BaseSettings):
         if self.alpaca_account_2_name and self.alpaca_account_2_key:
             accounts[self.alpaca_account_2_name] = (self.alpaca_account_2_key, self.alpaca_account_2_secret or "")
         return accounts
+
+    @property
+    def effective_database_url(self) -> str:
+        if self.postgres_host and self.postgres_user is not None:
+            from urllib.parse import quote_plus
+
+            user = quote_plus(self.postgres_user)
+            password = quote_plus(self.postgres_password or "")
+            return (
+                f"postgresql+psycopg://{user}:{password}"
+                f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+            )
+        return self.database_url
 
 
 _settings: Settings | None = None

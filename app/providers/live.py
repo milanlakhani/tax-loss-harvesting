@@ -20,7 +20,7 @@ def build_window_store(settings: Settings, session_factory):
         import boto3
 
         table = boto3.resource("dynamodb", region_name=settings.aws_region).Table(settings.dynamodb_table)
-        return DynamoDBRollingWindowStore(table)
+        return DynamoDBRollingWindowStore(table, ttl_days=settings.window_ttl_days)
     return PostgresRollingWindowStore(session_factory)
 
 
@@ -42,7 +42,12 @@ def build_live_providers(settings: Settings, windows=None) -> ProviderRouter:
     accounts = settings.alpaca_credentials()
     execution = AlpacaProvider(accounts, enable_paper_orders=settings.enable_paper_orders)
     market_key, market_secret = next(iter(accounts.values()))
-    equity = AlpacaMarketDataProvider(market_key, market_secret, history=av)
+    equity = AlpacaMarketDataProvider(
+        market_key,
+        market_secret,
+        history=av,
+        feed=settings.alpaca_market_data_feed,
+    )
     return ProviderRouter(equity=equity, crypto=cg, fx=fx, execution=execution)
 
 

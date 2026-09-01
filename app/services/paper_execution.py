@@ -190,6 +190,7 @@ class PaperExecutionService:
                     "asset_class": expected_alpaca_asset_class(asset.asset_type),
                     "reference_price": stored.get("reference_price"),
                     "reference_provider": stored.get("quote_provider"),
+                    "reference_feed": stored.get("quote_feed"),
                 },
             )
             session.add(order)
@@ -233,6 +234,8 @@ class PaperExecutionService:
                 "filled_quantity": str(order.filled_quantity) if order.filled_quantity is not None else None,
                 "fill_price": str(order.fill_price) if order.fill_price is not None else None,
                 "reference_price": (prep.snapshot or {}).get("reference_price") if prep else None,
+                "quote_provider": (prep.snapshot or {}).get("quote_provider") if prep else None,
+                "quote_feed": (prep.snapshot or {}).get("quote_feed") if prep else None,
             }
 
     async def _load_approved(self, session, candidate_id: UUID):
@@ -277,8 +280,11 @@ class PaperExecutionService:
             "quantity": str(qty),
             "tax_lot_quantity": str(lot.remaining_quantity),
             "quote_provider": quote.provider if quote else None,
+            "quote_feed": quote.feed if quote else None,
             "reference_price": str(quote.price) if quote else None,
             "reference_timestamp": quote.source_timestamp.isoformat() if quote else None,
+            "quote_retrieved_at": quote.retrieved_at.isoformat() if quote else None,
+            "quote_freshness_seconds": quote.freshness_seconds if quote else None,
             "quote_stale": bool(quote.stale) if quote else True,
             "estimated_proceeds": str(proceeds) if proceeds is not None else None,
             "basis": str(lot.remaining_basis) if lot.remaining_basis is not None else None,

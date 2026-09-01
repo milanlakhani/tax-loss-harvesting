@@ -734,7 +734,7 @@ def main() -> None:
         ])
         st.subheader("Approved opportunities")
         if approved:
-            st.dataframe([{"Rank":x.get("rank"),"Symbol":x.get("symbol"),"Type":x.get("asset_type"),"Quantity":x.get("selected_quantity"),"Estimated loss":x.get("estimated_loss"),"Reference price":x.get("reference_price"),"Provider":x.get("quote_provider"),"Decision":"Approved","Candidate ID":x.get("candidate_id")} for x in approved], use_container_width=True, hide_index=True)
+            st.dataframe([{"Rank":x.get("rank"),"Symbol":x.get("symbol"),"Type":x.get("asset_type"),"Quantity":x.get("selected_quantity"),"Estimated loss":x.get("estimated_loss"),"Reference price":x.get("reference_price"),"Provider":x.get("quote_provider"),"Feed":x.get("quote_feed"),"Decision":"Approved","Candidate ID":x.get("candidate_id")} for x in approved], use_container_width=True, hide_index=True)
         elif run_id:
             st.info("No candidate currently passes every safety rule. This is a valid fail-closed outcome.")
         st.subheader("Protected decisions")
@@ -763,7 +763,7 @@ def main() -> None:
                 st.success("Passed every configured hard gate and is eligible for paper-order preparation.")
             else:
                 st.warning(selected.get("explanation") or "Candidate blocked by policy.")
-            st.dataframe([{"Field":"Account","Value":selected.get("account")},{"Field":"Asset type","Value":selected.get("asset_type")},{"Field":"Quantity","Value":selected.get("selected_quantity")},{"Field":"Reference price","Value":selected.get("reference_price")},{"Field":"Quote provider","Value":selected.get("quote_provider")},{"Field":"Replacement","Value":selected.get("replacement")},{"Field":"Rule version","Value":selected.get("rule_version")},{"Field":"Candidate ID","Value":selected.get("candidate_id")}], use_container_width=True, hide_index=True)
+            st.dataframe([{"Field":"Account","Value":selected.get("account")},{"Field":"Asset type","Value":selected.get("asset_type")},{"Field":"Quantity","Value":selected.get("selected_quantity")},{"Field":"Reference price","Value":selected.get("reference_price")},{"Field":"Quote provider","Value":selected.get("quote_provider")},{"Field":"Quote feed","Value":selected.get("quote_feed")},{"Field":"Replacement","Value":selected.get("replacement")},{"Field":"Rule version","Value":selected.get("rule_version")},{"Field":"Candidate ID","Value":selected.get("candidate_id")}], use_container_width=True, hide_index=True)
     elif page == "Paper orders":
         st.header("Paper order review")
         st.caption("Select an approved opportunity, review a read-only snapshot, then use the separate confirmation control.")

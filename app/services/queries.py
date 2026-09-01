@@ -191,6 +191,10 @@ class QueryService:
                     "estimated_loss": str(evaluation.usable_loss) if evaluation and evaluation.usable_loss is not None else None,
                     "reference_price": str(evaluation.quote) if evaluation and evaluation.quote is not None else None,
                     "quote_provider": evaluation.quote_provider if evaluation else None,
+                    "quote_feed": (evaluation.extra or {}).get("quote_feed") if evaluation and evaluation.extra else None,
+                    "quote_source_timestamp": (evaluation.extra or {}).get("quote_source_timestamp") if evaluation and evaluation.extra else None,
+                    "quote_retrieved_at": (evaluation.extra or {}).get("quote_retrieved_at") if evaluation and evaluation.extra else None,
+                    "quote_freshness_seconds": (evaluation.extra or {}).get("quote_freshness_seconds") if evaluation and evaluation.extra else None,
                     "replacement": evaluation.replacement_canonical_id if evaluation else None,
                     "rule_version": evaluation.rule_version if evaluation else None,
                 }

@@ -94,6 +94,9 @@ async def test_prepare_confirm_and_guardrails(session, session_factory, settings
     assert refreshed["fill_price"] == "199.50"
     assert refreshed["reference_price"] == prepared_eq["reference_price"]
     assert refreshed["fill_price"] != refreshed["reference_price"]
+    assert refreshed["quote_provider"] == prepared_eq["quote_provider"]
+    assert "fill_price" not in prepared_eq
+    assert prepared_eq["reference_price"] != refreshed["fill_price"]
 
     providers.execution.seed_asset_class("ETH/USD", "us_equity")
     with pytest.raises(PaperExecutionError) as mismatch:
