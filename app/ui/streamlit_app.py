@@ -375,9 +375,9 @@ def _get(path: str):
         return None
 
 
-def _post(path: str, json: dict | None = None, files=None):
+def _post(path: str, json: dict | None = None, files=None, *, timeout: float = 30.0):
     try:
-        response = httpx.post(f"{BACKEND}{path}", headers=_headers(), json=json, files=files, timeout=30.0)
+        response = httpx.post(f"{BACKEND}{path}", headers=_headers(), json=json, files=files, timeout=timeout)
         if response.status_code >= 400:
             st.error(response.text)
             return None
@@ -493,6 +493,7 @@ def _retry_analysis_from_paper_orders() -> None:
     result = _post(
         "/api/analyses",
         json={"idempotency_key": f"streamlit-{uuid4().hex}", "trigger": "API"},
+        timeout=300.0,
     )
     if not result:
         return
@@ -743,6 +744,7 @@ def main() -> None:
                 result = _post(
                     "/api/analyses",
                     json={"idempotency_key": f"streamlit-{uuid4().hex}", "trigger": "API"},
+                    timeout=300.0,
                 )
             if result:
                 run_id = result["analysis_run_id"]
