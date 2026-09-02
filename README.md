@@ -89,6 +89,37 @@ streamlit run app/ui/streamlit_app.py --server.port 8501
 
 Replacement BUY suggestions are display-only and are never submitted.
 
+## Current-demo presentation data
+
+Historical 2024 fixtures remain the regression default (`DEMO_MODE=historical`). For a
+presentation against today's book, generate or refresh the current-demo dataset. The command is
+idempotent: it replaces previously generated current/historical demo statements and does not
+touch uploaded records (`demo_dataset` IS NULL).
+
+```bash
+python -m app.jobs.seed --mode current --as-of today
+```
+
+Set `DEMO_MODE=current` so analysis uses the persisted seed as-of (the same date as the generated
+statements). Generated current-demo statements are stored with `is_synthetic=true` and
+`demo_dataset=current`. That explicit marker—not filename, user ID, or `APP_ENV`—is what allows
+`DEMO_STATEMENT_MAX_AGE_DAYS` (default 20) to accept statement period-ends slightly behind as-of.
+Uploaded statements keep the conservative freshness policy. The 20-day allowance does not shorten
+the wash-sale window or skip incomplete-history checks.
+
+Before a demonstration, run the presentation-readiness check against the same database:
+
+```bash
+python -m app.jobs.presentation_check
+```
+
+Exit code 0 means current-demo statements exist, match the analysis as-of, are within the age
+allowance, cover the wash-sale window, and are not mixed with historical 2024 fixtures.
+
+Alpaca EQUITY/ETF last-session prices remain valid after the close, overnight, on weekends, and
+on market holidays. A paper order submitted while the cash session is closed may show status
+`QUEUED` until the next eligible session. Live trading is not enabled.
+
 ## Data-source ownership
 
 | Data | Owner |

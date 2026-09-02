@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     anomaly_window_days: int = 180
     window_overlap_hours: int = 24
     quote_max_age_minutes: int = 15
+    demo_statement_max_age_days: int = 20
     harvest_allow_exceed_target: bool = False
     crypto_repurchase_window_days: int = 30
     wash_sale_window_days: int = 30

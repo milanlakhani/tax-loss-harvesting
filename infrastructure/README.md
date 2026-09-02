@@ -214,6 +214,35 @@ Wait until the task stops with exit code 0:
 aws ecs describe-tasks --cluster CLUSTER_NAME --tasks TASK_ARN --query "tasks[0].{last:lastStatus,exit:containers[0].exitCode}"
 ```
 
+### 7b. One-off current-demo seed (presentation)
+
+Requires AWS credentials. Use the same migration task definition, secrets, public subnets, public
+IP, and task security group. Override the container command so the task seeds rather than migrates.
+
+Set `DEMO_MODE=current` in the application secret before or after this task. The seed persists the
+as-of date; analysis then evaluates current-demo statements against that same date.
+
+```bash
+aws ecs run-task --cluster CLUSTER_NAME --task-definition MIGRATION_TASK_DEFINITION_ARN --launch-type FARGATE --network-configuration "awsvpcConfiguration={subnets=[PUBLIC_SUBNET_ID],securityGroups=[TASK_SECURITY_GROUP_ID],assignPublicIp=ENABLED}" --overrides "{\"containerOverrides\":[{\"name\":\"migrate\",\"command\":[\"python\",\"-m\",\"app.jobs.seed\",\"--mode\",\"current\",\"--as-of\",\"today\"]}]}"
+```
+
+Wait until the task stops with exit code 0, using the same `aws ecs describe-tasks` query as the
+migration task.
+
+### 7c. Presentation-readiness check against the AWS database
+
+Requires AWS credentials. Same task definition and network as the seed task. Run this before the
+demonstration. Exit code 0 means the current-demo dataset is present, matches the analysis as-of,
+is within `DEMO_STATEMENT_MAX_AGE_DAYS`, covers the wash-sale window, and is not mixed with
+historical 2024 fixtures.
+
+```bash
+aws ecs run-task --cluster CLUSTER_NAME --task-definition MIGRATION_TASK_DEFINITION_ARN --launch-type FARGATE --network-configuration "awsvpcConfiguration={subnets=[PUBLIC_SUBNET_ID],securityGroups=[TASK_SECURITY_GROUP_ID],assignPublicIp=ENABLED}" --overrides "{\"containerOverrides\":[{\"name\":\"migrate\",\"command\":[\"python\",\"-m\",\"app.jobs.presentation_check\"]}]}"
+```
+
+Read the task logs for the JSON report (`ok`, `as_of`, `issues`). Then force a new service
+deployment if the secret or image changed so the running API uses `DEMO_MODE=current`.
+
 ### 8. Restart the service after secrets or image changes
 
 Requires AWS credentials.

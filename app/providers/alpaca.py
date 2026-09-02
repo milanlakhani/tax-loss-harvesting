@@ -1,19 +1,27 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, OrderType, TimeInForce
-from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.requests import GetCalendarRequest, MarketOrderRequest
 
 from app.domain.errors import ProviderError
 from app.providers.mappings import COINGECKO_IDS
-from app.providers.protocols import ExecutionPosition, SubmittedOrder
+from app.providers.protocols import ExecutionPosition, MarketClock, MarketSession, SubmittedOrder, ensure_utc
 
 # Live trading is never constructed from user input or request fields.
 ALPACA_PAPER_FORCED = True
+EASTERN = ZoneInfo("America/New_York")
+
+
+def _as_eastern_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=EASTERN).astimezone(UTC)
+    return ensure_utc(value)
 
 
 def _normalized_asset_class(raw: object) -> str:
@@ -141,6 +149,41 @@ class AlpacaProvider:
         if "crypto" in raw.lower():
             return "crypto"
         return "us_equity"
+
+    async def get_clock(self) -> MarketClock:
+        client = next(iter(self._clients.values()), None)
+        if client is None:
+            raise ProviderError("market clock unavailable", self.provider_name)
+        try:
+            clock = client.get_clock()
+        except Exception as exc:
+            raise ProviderError("market clock unavailable", self.provider_name) from exc
+        return MarketClock(
+            timestamp=ensure_utc(clock.timestamp),
+            is_open=bool(clock.is_open),
+            next_open=_as_eastern_utc(clock.next_open),
+            next_close=_as_eastern_utc(clock.next_close),
+        )
+
+    async def get_sessions(self, start: date, end: date) -> list[MarketSession]:
+        client = next(iter(self._clients.values()), None)
+        if client is None:
+            raise ProviderError("market calendar unavailable", self.provider_name)
+        try:
+            rows = client.get_calendar(GetCalendarRequest(start=start, end=end))
+        except Exception as exc:
+            raise ProviderError("market calendar unavailable", self.provider_name) from exc
+        sessions: list[MarketSession] = []
+        for row in rows or []:
+            session_date = row.date if hasattr(row.date, "year") else date.fromisoformat(str(row.date))
+            sessions.append(
+                MarketSession(
+                    session_date=session_date,
+                    open=_as_eastern_utc(row.open),
+                    close=_as_eastern_utc(row.close),
+                )
+            )
+        return sessions
 
     def record_seed_purchase(self, alias: str, symbol: str, quantity: Decimal) -> dict:
         payload = {

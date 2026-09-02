@@ -12,7 +12,7 @@ import httpx
 import qrcode
 import streamlit as st
 
-from app.ui.confirm_state import confirm_button_enabled
+from app.ui.confirm_state import confirm_button_enabled, paper_submit_feedback
 
 BACKEND = os.environ.get("BACKEND_URL", "http://localhost:8000")
 PAPER_BANNER = "SIMULATED PAPER TRADE - NO REAL MONEY"
@@ -492,6 +492,10 @@ def render_confirm_panel(
     display = {key: value for key, value in snapshot.items() if key != "token"}
     st.subheader("Read-only order snapshot")
     st.json(display)
+    if snapshot.get("quote_context") == "MARKET_CLOSED_USING_LAST_PRICE":
+        st.info(
+            "US equity market is closed. The reference price is the latest Alpaca trade from the most recently completed session. This is informational context, not a stale-quote rejection."
+        )
     checked = st.checkbox(
         "I reviewed the account, asset, SELL action, and quantity and understand that a simulated Alpaca paper order will be submitted.",
         value=False,
@@ -523,6 +527,9 @@ def render_confirm_panel(
         )
         if result:
             st.session_state.last_order = result
+            kind, message = paper_submit_feedback(result)
+            if kind == "info":
+                st.info(message)
             st.success(f"Provider order {result.get('provider_order_id')} status {result.get('status')}")
         else:
             st.error("Confirmation failed. Prepare again after correcting the error. No silent retry.")
@@ -824,6 +831,10 @@ def main() -> None:
                 {"label": "Symbol", "value": selected.get("symbol") or "—", "meta": _friendly_code(selected.get("asset_type"))},
                 {"label": "Estimated loss", "value": _currency(selected.get("estimated_loss")), "meta": "Before execution", "variant": "success" if approved_decision else ""},
             ])
+            if selected.get("quote_context") == "MARKET_CLOSED_USING_LAST_PRICE":
+                st.info(
+                    "US equity market is closed. This price is the latest Alpaca trade from the most recently completed session. It is not a stale-quote rejection."
+                )
             if selected.get("status") == "APPROVED":
                 st.success("Passed every configured hard gate and is eligible for paper-order preparation.")
             else:
@@ -877,8 +888,15 @@ def main() -> None:
             approved=bool(st.session_state.get("candidate_approved", False)),
         )
         last = st.session_state.get("last_order")
-        if last and st.button("Refresh paper-order status"):
-            st.write(_post(f"/api/paper-orders/{last['order_id']}/refresh"))
+        if last:
+            if last.get("queued") or last.get("status") == "QUEUED":
+                kind, message = paper_submit_feedback(last)
+                st.info(message)
+            if st.button("Refresh paper-order status"):
+                refreshed = _post(f"/api/paper-orders/{last['order_id']}/refresh")
+                if refreshed:
+                    st.session_state.last_order = {**last, **refreshed}
+                    st.write(refreshed)
     elif page == "WhatsApp integration":
         st.header("WhatsApp integration")
         st.caption("Connect a read-only WhatsApp channel for authoritative portfolio, risk, drift and safely evaluated tax-loss information.")

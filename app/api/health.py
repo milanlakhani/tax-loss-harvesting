@@ -10,7 +10,7 @@ from app.agents.mcp_client import probe_mcp
 from app.container import AppContainer, build_container
 from app.domain.enums import AnalysisTrigger
 from app.domain.errors import ActiveAnalysisExistsError, IdempotencyConflictError
-from app.demo_data.constants import resolve_analysis_as_of
+from app.demo_data.constants import resolve_runtime_as_of
 from app.services.analysis import run_analysis
 
 router = APIRouter()
@@ -63,10 +63,12 @@ async def create_analysis(
 ) -> AnalysisResponse:
     key = x_idempotency_key or body.idempotency_key
     try:
+        async with container.session_factory() as session:
+            as_of = await resolve_runtime_as_of(session, container.settings)
         result = await run_analysis(
             user_id,
             trigger=body.trigger if body.trigger is not AnalysisTrigger.SCHEDULED else AnalysisTrigger.API,
-            as_of=resolve_analysis_as_of(container.settings),
+            as_of=as_of,
             idempotency_key=key,
             deps=container.analysis_deps(),
         )

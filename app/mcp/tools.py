@@ -7,7 +7,7 @@ from enum import Enum
 from uuid import UUID
 
 from app.container import AppContainer
-from app.demo_data.constants import resolve_analysis_as_of
+from app.demo_data.constants import resolve_runtime_as_of
 from app.domain.enums import AnalysisTrigger
 from app.services.analysis import run_analysis, evaluate_candidate
 from app.services.ingestion import StatementIngestor
@@ -87,7 +87,8 @@ class McpToolHandlers:
         self.container = container
 
     async def get_quote(self, canonical_id: str, symbol: str, asset_type: str) -> dict:
-        as_of = resolve_analysis_as_of(self.container.settings)
+        async with self.container.session_factory() as session:
+            as_of = await resolve_runtime_as_of(session, self.container.settings)
         quote = await self.container.providers.quote_for_asset_type(asset_type, canonical_id, symbol, as_of)
         if quote is None:
             return {"found": False}
@@ -128,10 +129,12 @@ class McpToolHandlers:
             }
 
     async def run_analysis_tool(self, user_id: str, idempotency_key: str) -> dict:
+        async with self.container.session_factory() as session:
+            as_of = await resolve_runtime_as_of(session, self.container.settings)
         result = await run_analysis(
             UUID(user_id),
             trigger=AnalysisTrigger.API,
-            as_of=resolve_analysis_as_of(self.container.settings),
+            as_of=as_of,
             idempotency_key=idempotency_key,
             deps=self.container.analysis_deps(),
         )
@@ -143,10 +146,12 @@ class McpToolHandlers:
         }
 
     async def evaluate_candidate_tool(self, candidate_id: str) -> dict:
+        async with self.container.session_factory() as session:
+            as_of = await resolve_runtime_as_of(session, self.container.settings)
         evaluation = await evaluate_candidate(
             UUID(candidate_id),
             deps=self.container.analysis_deps(),
-            as_of=resolve_analysis_as_of(self.container.settings),
+            as_of=as_of,
         )
         return {
             "status": evaluation.status,
@@ -209,10 +214,11 @@ class McpToolHandlers:
 
     async def get_portfolio_insights(self, user_id: str) -> list[dict]:
         async with self.container.session_factory() as session:
+            as_of = await resolve_runtime_as_of(session, self.container.settings)
             return await QueryService(session).portfolio_insights(
                 UUID(user_id),
                 self.container.providers,
-                resolve_analysis_as_of(self.container.settings),
+                as_of,
             )
 
     async def get_latest_candidate_decisions(self, user_id: str) -> dict:

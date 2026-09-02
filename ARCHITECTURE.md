@@ -66,6 +66,11 @@ Metadata does not advance on a failed or partial refresh. Analysis consumes stor
 
 A missing current quote fails closed (`UNAVAILABLE_QUOTE` / `STALE_QUOTE`). The application does
 not substitute an order fill, a position average price, or an Alpha Vantage historical close.
+Alpaca EQUITY/ETF quotes use Alpaca's market clock and calendar: during an open session the
+configured intraday freshness limit applies; when the market is closed, the latest trade from
+the most recently completed session is accepted and recorded as informational
+`MARKET_CLOSED_USING_LAST_PRICE` context, not as a candidate rejection. Paper orders submitted
+outside eligible trading hours may be persisted as `QUEUED`.
 
 ## AWS demo (Chapter 6)
 

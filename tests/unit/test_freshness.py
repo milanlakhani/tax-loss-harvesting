@@ -15,6 +15,7 @@ from app.demo_data.constants import (
 from app.domain.enums import RejectionCode
 from app.providers.protocols import ExecutionPosition
 from app.services.freshness import (
+    CURRENT_DEMO_DATASET,
     brokerage_data_is_stale,
     position_mismatch_symbols,
     verify_proposed_sell_quantity,
@@ -50,6 +51,114 @@ def test_interactive_local_today_is_allowed():
     resolved = resolve_analysis_as_of(local, today=date(2026, 8, 28))
     assert resolved.date() == date(2026, 8, 28)
     assert resolved.hour == 15
+
+
+def test_aws_today_is_allowed():
+    aws = Settings(app_env="aws", demo_mode="current", demo_as_of_date="today")
+    resolved = resolve_analysis_as_of(aws, today=date(2026, 9, 1))
+    assert resolved.date() == date(2026, 9, 1)
+
+
+def test_current_demo_within_20_days_is_accepted_locally():
+    as_of = datetime(2026, 9, 1, 15, 0)
+    local = Settings(app_env="local", demo_statement_max_age_days=20)
+    assert (
+        brokerage_data_is_stale(
+            date(2026, 8, 22),
+            as_of,
+            is_synthetic=True,
+            demo_dataset=CURRENT_DEMO_DATASET,
+            max_age_days=local.demo_statement_max_age_days,
+        )
+        is False
+    )
+
+
+def test_current_demo_within_20_days_is_accepted_in_aws():
+    as_of = datetime(2026, 9, 1, 15, 0)
+    aws = Settings(app_env="aws", demo_statement_max_age_days=20)
+    assert (
+        brokerage_data_is_stale(
+            date(2026, 8, 22),
+            as_of,
+            is_synthetic=True,
+            demo_dataset=CURRENT_DEMO_DATASET,
+            max_age_days=aws.demo_statement_max_age_days,
+        )
+        is False
+    )
+
+
+def test_uploaded_non_demo_does_not_receive_allowance():
+    as_of = datetime(2026, 9, 1, 15, 0)
+    assert brokerage_data_is_stale(date(2026, 8, 22), as_of) is True
+    assert (
+        brokerage_data_is_stale(
+            date(2026, 8, 22),
+            as_of,
+            is_synthetic=True,
+            demo_dataset=None,
+            max_age_days=20,
+        )
+        is True
+    )
+    assert (
+        brokerage_data_is_stale(
+            date(2026, 8, 22),
+            as_of,
+            is_synthetic=True,
+            demo_dataset="historical",
+            max_age_days=20,
+        )
+        is True
+    )
+
+
+def test_current_demo_older_than_20_days_fails_closed():
+    as_of = datetime(2026, 9, 1, 15, 0)
+    assert (
+        brokerage_data_is_stale(
+            date(2026, 8, 1),
+            as_of,
+            is_synthetic=True,
+            demo_dataset=CURRENT_DEMO_DATASET,
+            max_age_days=20,
+        )
+        is True
+    )
+
+
+def test_demo_allowance_does_not_change_wash_or_incomplete_history_rules():
+    as_of = datetime(2026, 8, 28, 15, 0)
+    assert (
+        brokerage_data_is_stale(
+            date(2026, 8, 18),
+            as_of,
+            is_synthetic=True,
+            demo_dataset=CURRENT_DEMO_DATASET,
+            max_age_days=20,
+        )
+        is False
+    )
+    assert wash_sale_coverage_complete(date(2026, 3, 15), date(2026, 8, 28), as_of, 30) is True
+    assert wash_sale_coverage_complete(date(2026, 8, 20), date(2026, 8, 28), as_of, 30) is False
+    assert wash_sale_coverage_complete(date(2026, 3, 15), date(2026, 8, 18), as_of, 30) is False
+
+
+def test_filename_user_or_env_do_not_grant_demo_allowance():
+    as_of = datetime(2026, 9, 1, 15, 0)
+    env = Settings(app_env="aws", demo_mode="current")
+    assert env.app_env == "aws"
+    assert (
+        brokerage_data_is_stale(
+            date(2026, 8, 22),
+            as_of,
+            is_synthetic=True,
+            demo_dataset=None,
+            max_age_days=env.demo_statement_max_age_days,
+        )
+        is True
+    )
 
 
 def test_brokerage_stale_and_wash_coverage():

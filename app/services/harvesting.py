@@ -43,6 +43,7 @@ from app.services.freshness import (
     verify_proposed_sell_quantity,
     wash_sale_coverage_complete,
 )
+from app.services.quote_freshness import assess_quote_freshness
 from app.services.portfolio import class_weights, simulated_weights_after_sale
 
 ALLOWED_TRANSITIONS = {
@@ -81,7 +82,10 @@ class GateContext:
     alpaca_positions: list
     brokerage_period_start: object | None
     brokerage_period_end: object | None
+    brokerage_is_synthetic: bool
+    brokerage_demo_dataset: str | None
     statement_qty_by_symbol: dict
+    quote_context: str | None
 
 
 @dataclass(slots=True)
@@ -217,10 +221,16 @@ class HarvestingService:
             alpaca_positions=alpaca_positions,
             brokerage_period_start=brokerage_stmt.period_start if brokerage_stmt else None,
             brokerage_period_end=brokerage_stmt.period_end if brokerage_stmt else None,
+            brokerage_is_synthetic=bool(brokerage_stmt.is_synthetic) if brokerage_stmt else False,
+            brokerage_demo_dataset=getattr(brokerage_stmt, "demo_dataset", None) if brokerage_stmt else None,
             statement_qty_by_symbol=statement_quantities_by_symbol(lot_symbols),
+            quote_context=None,
         )
         code, explanation, status = await self._apply_gates(session, ctx, as_of, asset_values, class_of)
         transition(candidate.status, status)
+        extra = quote.provenance() if quote else None
+        if extra is not None and ctx.quote_context:
+            extra = {**extra, "quote_context": ctx.quote_context}
         evaluation = Evaluation(
             id=uuid4(),
             candidate_id=candidate.id,
@@ -234,7 +244,7 @@ class HarvestingService:
             total_loss=total_loss,
             quote=quote.price if quote else None,
             quote_provider=quote.provider if quote else None,
-            extra=quote.provenance() if quote else None,
+            extra=extra,
             basis=lot.remaining_basis,
             replacement_canonical_id=replacement[0] if replacement else None,
             estimated_cost=(quote.price * Decimal("0.0005") * lot.remaining_quantity) if quote else None,
@@ -313,9 +323,20 @@ class HarvestingService:
             return RejectionCode.NON_POSITIVE_QUANTITY, "Remaining quantity must be positive", CandidateStatus.REJECTED
         if ctx.quote is None:
             return RejectionCode.UNAVAILABLE_QUOTE, "No quote from the required provider", CandidateStatus.NOT_EXECUTABLE
-        age = as_of - ctx.quote.source_timestamp
-        if age > timedelta(minutes=self.settings.quote_max_age_minutes):
-            return RejectionCode.STALE_QUOTE, "Quote exceeds configured freshness", CandidateStatus.NOT_EXECUTABLE
+        freshness_quote = await assess_quote_freshness(
+            quote=ctx.quote,
+            as_of=as_of,
+            max_age_minutes=self.settings.quote_max_age_minutes,
+            asset_type=asset.asset_type,
+            calendar=self.providers.execution,
+        )
+        if not freshness_quote.ok:
+            return (
+                freshness_quote.rejection or RejectionCode.STALE_QUOTE,
+                freshness_quote.explanation or "Quote exceeds configured freshness",
+                CandidateStatus.NOT_EXECUTABLE,
+            )
+        ctx.quote_context = freshness_quote.context
         if ctx.total_loss is None or ctx.total_loss <= 0:
             return RejectionCode.PROFITABLE_LOT, "Profitable lots are not harvesting candidates", CandidateStatus.REJECTED
         if ctx.total_loss < self.settings.min_loss_threshold:
@@ -365,7 +386,7 @@ class HarvestingService:
             return ownership, "Mapped Alpaca account does not own the proposed sell quantity", CandidateStatus.NOT_EXECUTABLE
         executed = await session.scalar(
             select(PaperOrder).join(PaperOrder.preparation).where(
-                PaperOrder.status.in_(["SUBMITTED", "PARTIALLY_FILLED", "FILLED"])
+                PaperOrder.status.in_(["SUBMITTED", "QUEUED", "PARTIALLY_FILLED", "FILLED"])
             )
         )
         # Previously executed: any filled paper order for this lot.
@@ -389,7 +410,13 @@ class HarvestingService:
                 "No brokerage statement covers wash-sale evaluation",
                 CandidateStatus.NOT_EXECUTABLE,
             )
-        if brokerage_data_is_stale(ctx.brokerage_period_end, as_of):
+        if brokerage_data_is_stale(
+            ctx.brokerage_period_end,
+            as_of,
+            is_synthetic=ctx.brokerage_is_synthetic,
+            demo_dataset=ctx.brokerage_demo_dataset,
+            max_age_days=self.settings.demo_statement_max_age_days,
+        ):
             return (
                 RejectionCode.DATA_STALE,
                 "Brokerage statement is older than the analysis as-of date and is not the current Alpaca portfolio",
@@ -582,7 +609,7 @@ class HarvestingService:
             .join(HC, ExecutionPreparation.candidate_id == HC.id)
             .where(
                 HC.tax_lot_id == lot_id,
-                PaperOrder.status.in_(["SUBMITTED", "PARTIALLY_FILLED", "FILLED"]),
+                PaperOrder.status.in_(["SUBMITTED", "QUEUED", "PARTIALLY_FILLED", "FILLED"]),
             )
         )
         return row is not None

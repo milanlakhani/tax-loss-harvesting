@@ -6,7 +6,7 @@ from datetime import datetime
 from uuid import UUID
 
 from app.container import build_container
-from app.demo_data.constants import resolve_analysis_as_of
+from app.demo_data.constants import resolve_runtime_as_of
 from app.domain.enums import AnalysisTrigger
 from app.persistence.models import User
 from app.services.analysis import run_analysis
@@ -21,8 +21,8 @@ def _cli_idempotency_key(user_id: UUID, as_of: datetime) -> str:
 async def _run(user_id: UUID | None, all_users: bool) -> None:
     container = build_container()
     deps = container.analysis_deps()
-    as_of = resolve_analysis_as_of(container.settings)
     async with container.session_factory() as session:
+        as_of = await resolve_runtime_as_of(session, container.settings)
         if all_users:
             users = list(await session.scalars(select(User)))
             ids = [u.id for u in users]

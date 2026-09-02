@@ -43,15 +43,22 @@ class StatementIngestor:
         self.storage = storage
         self.fx = fx
 
-    async def ingest(self, session: AsyncSession, data: bytes, filename: str) -> IngestResult:
+    async def ingest(
+        self,
+        session: AsyncSession,
+        data: bytes,
+        filename: str,
+        *,
+        demo_dataset: str | None = None,
+    ) -> IngestResult:
         extracted = extract_pdf(data)
         fmt = detect_format(extracted)
         if fmt is StatementFormat.SYNTHETIC_BANK_V1:
             parsed = parse_bank_pdf(data)
-            return await self._ingest_bank(session, data, filename, parsed)
+            return await self._ingest_bank(session, data, filename, parsed, demo_dataset=demo_dataset)
         if fmt is StatementFormat.SYNTHETIC_BROKERAGE_V1:
             parsed = parse_brokerage_pdf(data)
-            return await self._ingest_brokerage(session, data, filename, parsed)
+            return await self._ingest_brokerage(session, data, filename, parsed, demo_dataset=demo_dataset)
         raise ParseError("Unsupported format", ParseErrorCode.UNKNOWN_FORMAT)
 
     async def _ingest_bank(
@@ -60,6 +67,8 @@ class StatementIngestor:
         data: bytes,
         filename: str,
         parsed: ParsedBankStatement,
+        *,
+        demo_dataset: str | None = None,
     ) -> IngestResult:
         existing = await session.scalar(
             select(Statement).where(Statement.external_statement_id == parsed.external_statement_id)
@@ -87,6 +96,7 @@ class StatementIngestor:
             source_path=str(path),
             parsing_confidence=parsed.parsing_confidence,
             is_synthetic=True,
+            demo_dataset=demo_dataset,
         )
         session.add(statement)
         for row in parsed.transactions:
@@ -156,6 +166,8 @@ class StatementIngestor:
         data: bytes,
         filename: str,
         parsed: ParsedBrokerageStatement,
+        *,
+        demo_dataset: str | None = None,
     ) -> IngestResult:
         existing = await session.scalar(
             select(Statement).where(Statement.external_statement_id == parsed.external_statement_id)
@@ -184,6 +196,7 @@ class StatementIngestor:
             source_path=str(path),
             parsing_confidence=parsed.parsing_confidence,
             is_synthetic=True,
+            demo_dataset=demo_dataset,
         )
         session.add(statement)
         assets_by_canonical: dict[str, Asset] = {}

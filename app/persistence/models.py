@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -91,6 +91,7 @@ class Statement(Base):
     source_path: Mapped[str] = mapped_column(Text, nullable=False)
     parsing_confidence: Mapped[Decimal] = mapped_column(Numeric(8, 6), nullable=False, default=Decimal("1.0"))
     is_synthetic: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    demo_dataset: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
     account: Mapped[PortfolioAccount] = relationship(
@@ -628,3 +629,14 @@ class MirrorManifest(Base):
     payload: Mapped[dict] = mapped_column(JSONType, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     is_synthetic: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class DemoDatasetState(Base):
+    """Persisted seed clock for a generated demo dataset. Not inferred from APP_ENV."""
+
+    __tablename__ = "demo_dataset_state"
+
+    dataset: Mapped[str] = mapped_column(String(32), primary_key=True)
+    as_of_date: Mapped[date] = mapped_column(Date(), nullable=False)
+    is_synthetic: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    seeded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)

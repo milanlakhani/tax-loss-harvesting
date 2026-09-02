@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from app.demo_data.constants import AS_OF, USER_A_ID
-from app.domain.enums import AnalysisTrigger, CandidateStatus
+from app.domain.enums import AnalysisTrigger, CandidateStatus, PaperOrderStatus
 from app.domain.errors import PaperExecutionError
 from app.persistence.models import Asset, ExecutionPreparation, HarvestingCandidate, TaxLot
 from app.providers.fakes import RecordingClock
@@ -166,3 +166,24 @@ async def test_unavailable_quote_does_not_bypass_evaluation(session, session_fac
     async with session_factory() as db:
         vti = await _candidate(db, result.analysis_run_id, "A-VTI-APPROVED")
         assert vti.status != CandidateStatus.APPROVED.value
+
+
+@pytest.mark.integration
+async def test_outside_hours_paper_order_is_accepted_as_queued(session, session_factory, settings):
+    providers = await seed_historical_demo(session, settings)
+    providers.execution.market_open = False
+    providers.execution.submit_status = "accepted"
+    deps = analysis_deps(settings, session_factory, providers)
+    result = await run_analysis(USER_A_ID, trigger=AnalysisTrigger.MANUAL, as_of=AS_OF, idempotency_key="queued-hours", deps=deps)
+    enabled = settings.model_copy(update={"enable_paper_orders": True})
+    live = PaperExecutionService(enabled, session_factory, providers, RecordingClock(AS_OF))
+    demo_token = await DemoSessionService(settings, session_factory).create(USER_A_ID)
+    async with session_factory() as db:
+        equity = await _candidate(db, result.analysis_run_id, "A-VTI-APPROVED")
+    prepared = await live.prepare(candidate_id=equity.id, demo_session_token=demo_token)
+    confirmed = await live.confirm(candidate_id=equity.id, token=prepared["token"], demo_session_token=demo_token)
+    assert confirmed["status"] == PaperOrderStatus.QUEUED.value
+    assert confirmed["queued"] is True
+    assert confirmed["provider_status"] == "accepted"
+    assert "queued" in (confirmed["queue_reason"] or "").lower()
+

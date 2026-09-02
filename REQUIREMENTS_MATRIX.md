@@ -68,7 +68,11 @@ Status is complete only when the behavior is implemented and covered by tests, n
 | Mirror manifest fields; planned sale ≤ manifest qty; PG is tax-lot source | `_mirror_payload` | generate payload |
 | Tests never call live APIs; patch at provider boundary | `tests/conftest.py` `BlockedSocket`; fakes only | conftest + routing test |
 | Current-demo statements relative to `DEMO_AS_OF_DATE` (default 2026-08-28); 2024 PDFs preserved | `build_bank_statements(as_of=)`, `portfolio_*_spec(as_of=)` | `tests/parsers/test_current_demo.py` |
-| Interactive local demo may set `DEMO_AS_OF_DATE=today`; tests pin a fixed date | `parse_demo_as_of_date`, `resolve_analysis_as_of` | `tests/unit/test_freshness.py` |
+| Interactive local or AWS demo may set `DEMO_AS_OF_DATE=today`; tests pin a fixed date | `parse_demo_as_of_date`, `resolve_analysis_as_of` | `tests/unit/test_freshness.py` |
+| Current-demo seed is idempotent; statements marked `demo_dataset=current` and evaluated at the persisted as-of | `app/jobs/seed`, `DemoDatasetState` | `test_current_demo_seed_is_idempotent_and_does_not_mix_historical` |
+| `DEMO_STATEMENT_MAX_AGE_DAYS` (default 20) applies only to persisted synthetic current-demo data in local and AWS; uploads stay conservative | `brokerage_data_is_stale` | `tests/unit/test_freshness.py` |
+| Alpaca EQUITY/ETF last completed-session price is accepted when the market is closed; `MARKET_CLOSED_USING_LAST_PRICE` is informational | `assess_quote_freshness` | `tests/unit/test_quote_freshness.py` |
+| Outside-hours paper orders may persist as `QUEUED` | `map_paper_order_status`, Streamlit confirm copy | paper execution + confirm_state tests |
 | Current-demo bank history meets `min_history_threshold`; wash/reinvest/scheduled offsets explicit; dividend dates consistent | bank/brokerage generators | current-demo parser tests |
 | Current brokerage qty from mapped Alpaca account; reconcile lots; never treat 2024 as current book | `HarvestingService._freshness_or_reconciliation` | `tests/services/test_reconciliation.py` |
 | Missing coverage or mismatch fails closed (`DATA_STALE`, `INCOMPLETE_HISTORY`, `POSITION_MISMATCH`); verify qty before order | `app/services/freshness.py` | reconciliation + freshness tests |

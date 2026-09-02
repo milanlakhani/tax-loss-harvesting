@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -9,17 +10,19 @@ from app.adapters.storage import LocalStatementStorage
 from app.demo_data.bank_generator import build_bank_statements
 from app.demo_data.bank_pdf import render_bank_pdf
 from app.demo_data.generate import build_fake_providers, generate
-from app.demo_data.constants import USER_A_ID, USER_B_ID
+from app.demo_data.constants import DEFAULT_DEMO_AS_OF_DATE, USER_A_ID, USER_B_ID
 from app.persistence.models import (
     AnomalyGroundTruth,
     BankTransaction,
     BrokerageDividend,
     BrokeragePurchase,
     BrokerageSale,
+    DemoDatasetState,
     Statement,
     TaxLot,
     User,
 )
+from app.services.freshness import CURRENT_DEMO_DATASET
 from app.services.ingestion import StatementIngestor
 
 
@@ -103,8 +106,42 @@ async def test_ingest_is_idempotent_and_rolls_back_on_parse_error(session, setti
     assert first.reused is False
     assert second.reused is True
     assert first.statement_id == second.statement_id
+    persisted = await session.get(Statement, first.statement_id)
+    assert persisted is not None
+    assert persisted.demo_dataset is None
     before = list(await session.scalars(select(BankTransaction)))
     with pytest.raises(Exception):
         await ingestor.ingest(session, b"not-a-pdf", "bad.pdf")
     after = list(await session.scalars(select(BankTransaction)))
     assert len(before) == len(after)
+
+
+@pytest.mark.integration
+async def test_current_demo_seed_is_idempotent_and_does_not_mix_historical(session_factory, settings):
+    from app.config import override_settings
+    from app.persistence.database import reset_engine
+
+    override_settings(settings)
+    reset_engine()
+    first = await generate(mode="current", as_of_date=date(2026, 8, 28))
+    second = await generate(mode="current", as_of_date=date(2026, 8, 31))
+    assert first["as_of"] == "2026-08-28"
+    assert second["as_of"] == "2026-08-31"
+    async with session_factory() as db:
+        current = list(await db.scalars(select(Statement).where(Statement.demo_dataset == CURRENT_DEMO_DATASET)))
+        historical = list(await db.scalars(select(Statement).where(Statement.demo_dataset == "historical")))
+        brokerage_ids = {row.external_statement_id for row in current if row.format == "SYNTHETIC_BROKERAGE_V1"}
+        state = await db.get(DemoDatasetState, CURRENT_DEMO_DATASET)
+        assert current
+        assert all(row.is_synthetic for row in current)
+        assert historical == []
+        assert "BRK-A-2026-08-28" not in brokerage_ids
+        assert "BRK-A-2026-08-31" in brokerage_ids
+        assert state is not None
+        assert state.as_of_date == date(2026, 8, 31)
+        from app.jobs.presentation_check import check_presentation_readiness
+
+        current_settings = settings.model_copy(update={"demo_mode": "current", "demo_as_of_date": "2026-08-31"})
+        readiness = await check_presentation_readiness(db, current_settings)
+        assert readiness["ok"] is True
+

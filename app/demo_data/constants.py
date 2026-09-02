@@ -29,20 +29,40 @@ def parse_demo_as_of_date(value: str, *, allow_today: bool, today: date | None =
     raw = value.strip()
     if raw.lower() == "today":
         if not allow_today:
-            raise ValueError("DEMO_AS_OF_DATE=today is only allowed in interactive local demo mode")
+            raise ValueError("DEMO_AS_OF_DATE=today is only allowed in local or AWS demo mode")
         return today or datetime.now(UTC).date()
     return date.fromisoformat(raw)
+
+
+def today_is_allowed(settings) -> bool:
+    return bool(getattr(settings, "is_local", False) or getattr(settings, "is_aws", False))
 
 
 def resolve_analysis_as_of(settings, *, today: date | None = None) -> datetime:
     mode = (settings.demo_mode or "historical").strip().lower()
     if mode in {"historical", "hist", "regression"}:
         return AS_OF
-    allow_today = bool(settings.is_local)
+    allow_today = today_is_allowed(settings)
     if settings.demo_as_of_date.strip().lower() == "today" and allow_today and today is None:
         return datetime.now(UTC)
     day = parse_demo_as_of_date(settings.demo_as_of_date, allow_today=allow_today, today=today)
     return as_of_datetime(day)
+
+
+async def resolve_runtime_as_of(session, settings, *, today: date | None = None) -> datetime:
+    """Use the persisted current-demo seed date so analysis matches generated statements."""
+    mode = (settings.demo_mode or "historical").strip().lower()
+    if mode in {"historical", "hist", "regression"}:
+        return AS_OF
+    from sqlalchemy import select
+
+    from app.persistence.models import DemoDatasetState
+    from app.services.freshness import CURRENT_DEMO_DATASET
+
+    row = await session.scalar(select(DemoDatasetState).where(DemoDatasetState.dataset == CURRENT_DEMO_DATASET))
+    if row is not None:
+        return as_of_datetime(row.as_of_date)
+    return resolve_analysis_as_of(settings, today=today)
 
 
 def shift_from_historical(day: date, target_as_of: date) -> date:

@@ -16,6 +16,7 @@ from app.demo_data.bank_generator import build_bank_statements
 from app.demo_data.bank_pdf import render_bank_pdf
 from app.demo_data.brokerage_generator import portfolio_a_spec, portfolio_b_spec
 from app.demo_data.brokerage_pdf import render_brokerage_pdf
+from app.demo_data.replace import replace_generated_demo_data
 from app.demo_data.constants import (
     AS_OF,
     ASSET_CATALOG,
@@ -33,6 +34,7 @@ from app.demo_data.constants import (
     as_of_datetime,
     parse_demo_as_of_date,
     quote_timestamps_for,
+    today_is_allowed,
 )
 from app.domain.enums import AccountType
 from app.persistence.database import session_scope
@@ -40,6 +42,7 @@ from app.persistence.models import (
     AnomalyGroundTruth,
     Asset,
     BankTransaction,
+    DemoDatasetState,
     MirrorManifest,
     PaperMirrorActivity,
     PortfolioAccount,
@@ -50,6 +53,7 @@ from app.persistence.models import (
 )
 from app.providers.fakes import FakeCryptoQuoteProvider, FakeEquityQuoteProvider, FakeExecutionProvider, FakeFxProvider
 from app.providers.protocols import ExecutionPosition, PriceObservation, ProviderRouter, Quote
+from app.services.freshness import CURRENT_DEMO_DATASET, HISTORICAL_DEMO_DATASET
 from app.services.ingestion import StatementIngestor
 
 
@@ -349,18 +353,20 @@ async def generate(
     if mode == "current":
         as_of_date = as_of_date or parse_demo_as_of_date(
             settings.demo_as_of_date,
-            allow_today=settings.is_local,
+            allow_today=today_is_allowed(settings),
         )
         as_of = as_of_datetime(as_of_date)
         statements, labels = build_bank_statements(as_of=as_of_date, min_history=min_history)
         brokerage = [portfolio_a_spec(as_of=as_of_date), portfolio_b_spec(as_of=as_of_date)]
         filename_prefix = "current-demo/"
+        demo_dataset = CURRENT_DEMO_DATASET
     else:
         as_of = AS_OF
         as_of_date = AS_OF.date()
         statements, labels = build_bank_statements()
         brokerage = [portfolio_a_spec(), portfolio_b_spec()]
         filename_prefix = ""
+        demo_dataset = HISTORICAL_DEMO_DATASET
     storage = LocalStatementStorage(settings.local_data_dir)
     providers = build_fake_providers(as_of, brokerage_specs=brokerage)
     ingestor = StatementIngestor(storage, providers.fx)
@@ -369,13 +375,42 @@ async def generate(
         await seed_replacements(session)
         await seed_risk_and_targets(session)
         await seed_mirrors(session, providers)
+        await replace_generated_demo_data(session)
         for spec in statements:
             pdf = render_bank_pdf(spec)
-            await ingestor.ingest(session, pdf, f"{filename_prefix}{spec.statement_id}.pdf")
+            await ingestor.ingest(
+                session,
+                pdf,
+                f"{filename_prefix}{spec.statement_id}.pdf",
+                demo_dataset=demo_dataset,
+            )
         for spec in brokerage:
             pdf = render_brokerage_pdf(spec)
-            await ingestor.ingest(session, pdf, f"{filename_prefix}{spec.statement_id}.pdf")
+            await ingestor.ingest(
+                session,
+                pdf,
+                f"{filename_prefix}{spec.statement_id}.pdf",
+                demo_dataset=demo_dataset,
+            )
         await seed_labels(session, labels)
+        existing_state = await session.get(DemoDatasetState, demo_dataset)
+        if existing_state is None:
+            session.add(
+                DemoDatasetState(
+                    dataset=demo_dataset,
+                    as_of_date=as_of_date,
+                    is_synthetic=True,
+                )
+            )
+        else:
+            existing_state.as_of_date = as_of_date
+            existing_state.is_synthetic = True
+        if demo_dataset == CURRENT_DEMO_DATASET:
+            other = await session.get(DemoDatasetState, HISTORICAL_DEMO_DATASET)
+        else:
+            other = await session.get(DemoDatasetState, CURRENT_DEMO_DATASET)
+        if other is not None:
+            await session.delete(other)
         await session.flush()
         summary = await _build_summary(session, labels)
     summary["mode"] = mode
@@ -391,7 +426,7 @@ def write_statement_pdfs(*, mode: str = "historical", as_of_date: date | None = 
     """Write PDFs without ingesting. Historical 2024 filenames are never reused for current-demo."""
     settings = get_settings()
     if mode == "current":
-        as_of_date = as_of_date or parse_demo_as_of_date(settings.demo_as_of_date, allow_today=settings.is_local)
+        as_of_date = as_of_date or parse_demo_as_of_date(settings.demo_as_of_date, allow_today=today_is_allowed(settings))
         dest = dest or (Path(settings.local_data_dir) / "current-demo")
         statements, _labels = build_bank_statements(as_of=as_of_date, min_history=settings.min_history_threshold)
         brokerage = [portfolio_a_spec(as_of=as_of_date), portfolio_b_spec(as_of=as_of_date)]
@@ -460,8 +495,7 @@ def main() -> None:
     args = parser.parse_args()
     as_of_date = None
     if args.as_of:
-        settings = get_settings()
-        as_of_date = parse_demo_as_of_date(args.as_of, allow_today=settings.is_local)
+        as_of_date = parse_demo_as_of_date(args.as_of, allow_today=True)
     if args.pdfs_only:
         paths = write_statement_pdfs(mode=args.mode, as_of_date=as_of_date)
         print(json.dumps({"mode": args.mode, "pdfs": [str(p) for p in paths]}, indent=2))

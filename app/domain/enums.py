@@ -35,11 +35,16 @@ class PreparationStatus(str, Enum):
 
 class PaperOrderStatus(str, Enum):
     SUBMITTED = "SUBMITTED"
+    QUEUED = "QUEUED"
     PARTIALLY_FILLED = "PARTIALLY_FILLED"
     FILLED = "FILLED"
     FAILED = "FAILED"
     EXPIRED = "EXPIRED"
     CANCELLED = "CANCELLED"
+
+
+class QuoteContext(str, Enum):
+    MARKET_CLOSED_USING_LAST_PRICE = "MARKET_CLOSED_USING_LAST_PRICE"
 
 
 class AssetType(str, Enum):

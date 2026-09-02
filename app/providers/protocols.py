@@ -1,15 +1,34 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 
+ALPACA_MARKET_DATA_PROVIDER = "alpaca-market-data"
+
+
 def ensure_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class MarketClock:
+    timestamp: datetime
+    is_open: bool
+    next_open: datetime
+    next_close: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class MarketSession:
+    session_date: date
+    open: datetime
+    close: datetime
 
 
 class Quote:
@@ -216,6 +235,10 @@ class ExecutionProvider(Protocol):
     async def get_order(self, account_alias: str, provider_order_id: str) -> SubmittedOrder | None: ...
 
     async def provider_asset_class(self, symbol: str) -> str | None: ...
+
+    async def get_clock(self) -> MarketClock: ...
+
+    async def get_sessions(self, start: date, end: date) -> list[MarketSession]: ...
 
 
 class ProviderRouter:

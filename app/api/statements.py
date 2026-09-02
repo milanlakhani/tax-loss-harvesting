@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from app.api.deps import get_container, require_demo_session
 from app.container import AppContainer
 from app.domain.errors import ParseError
-from app.demo_data.constants import resolve_analysis_as_of
+from app.demo_data.constants import resolve_runtime_as_of
 from app.persistence.models import DemoSession
 from app.services.demo_session import DemoSessionService
 
@@ -130,9 +130,10 @@ async def get_portfolio_insights(
     from app.services.queries import QueryService
 
     async with container.session_factory() as session:
+        as_of = await resolve_runtime_as_of(session, container.settings)
         rows = await QueryService(session).portfolio_insights(
             demo.user_id,
             container.providers,
-            resolve_analysis_as_of(container.settings),
+            as_of,
         )
     return {"portfolios": rows}

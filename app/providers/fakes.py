@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
+from app.domain.errors import ProviderError
 from app.providers.protocols import (
     CryptoQuoteProvider,
     EquityQuoteProvider,
@@ -10,6 +11,8 @@ from app.providers.protocols import (
     ExecutionProvider,
     FxProvider,
     FxRate,
+    MarketClock,
+    MarketSession,
     PriceObservation,
     Quote,
     SubmittedOrder,
@@ -144,6 +147,14 @@ class FakeExecutionProvider:
         self.orders: dict[str, SubmittedOrder] = {}
         self.submit_calls: list[dict] = []
         self.reject_submit: str | None = None
+        self.submit_status: str = "SUBMITTED"
+        self.market_open: bool = True
+        self.clock_timestamp: datetime | None = None
+        self.next_open: datetime | None = None
+        self.next_close: datetime | None = None
+        self.sessions: list[MarketSession] = []
+        self.clock_error: str | None = None
+        self.calendar_error: str | None = None
 
     def seed_position(self, position: ExecutionPosition) -> None:
         self.positions[(position.account_alias, position.symbol)] = position
@@ -199,7 +210,7 @@ class FakeExecutionProvider:
         order = SubmittedOrder(
             client_order_id=client_order_id,
             provider_order_id=f"alpaca-{client_order_id}",
-            status="SUBMITTED",
+            status=self.submit_status,
             symbol=symbol,
             quantity=quantity,
             filled_qty=None,
@@ -265,6 +276,26 @@ class FakeExecutionProvider:
         if symbol.endswith("/USD"):
             return "crypto"
         return mapped or "us_equity"
+
+    async def get_clock(self) -> MarketClock:
+        self.calls.append(("clock", ""))
+        if self.clock_error:
+            raise ProviderError(self.clock_error, self.provider_name)
+        timestamp = self.clock_timestamp or datetime.now(UTC)
+        next_open = self.next_open or timestamp
+        next_close = self.next_close or timestamp
+        return MarketClock(
+            timestamp=timestamp,
+            is_open=self.market_open,
+            next_open=next_open,
+            next_close=next_close,
+        )
+
+    async def get_sessions(self, start: date, end: date) -> list[MarketSession]:
+        self.calls.append(("sessions", f"{start}:{end}"))
+        if self.calendar_error:
+            raise ProviderError(self.calendar_error, self.provider_name)
+        return [session for session in self.sessions if start <= session.session_date <= end]
 
 
 class RecordingClock:

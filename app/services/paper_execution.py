@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -22,13 +22,48 @@ from app.persistence.models import (
     PaperOrder,
     PortfolioAccount,
     TaxLot,
-    User,
 )
 from app.providers.mappings import coingecko_id_for, expected_alpaca_asset_class
 from app.providers.protocols import ProviderRouter, Quote
 from app.services.conflicts import ConflictService
 from app.services.freshness import verify_proposed_sell_quantity
 from app.services.harvesting import HarvestingService
+from app.services.quote_freshness import assess_quote_freshness
+
+QUEUED_PROVIDER_STATUSES = frozenset(
+    {
+        "accepted",
+        "pending_new",
+        "new",
+        "held",
+        "accepted_for_bidding",
+        "pending",
+        "queued",
+    }
+)
+PAPER_QUEUED_MESSAGE = (
+    "The US equity market is closed. This simulated paper order was accepted and is queued "
+    "for the next eligible trading session."
+)
+
+
+def map_paper_order_status(provider_status: str, *, market_open: bool | None) -> PaperOrderStatus:
+    normalized = str(provider_status or "").lower().replace("-", "_").replace(" ", "_")
+    if "cancel" in normalized:
+        return PaperOrderStatus.CANCELLED
+    if "reject" in normalized or "fail" in normalized:
+        return PaperOrderStatus.FAILED
+    if "expir" in normalized:
+        return PaperOrderStatus.EXPIRED
+    if "partial" in normalized and "fill" in normalized:
+        return PaperOrderStatus.PARTIALLY_FILLED
+    if "fill" in normalized:
+        return PaperOrderStatus.FILLED
+    if market_open is False and (normalized in QUEUED_PROVIDER_STATUSES or normalized == "submitted"):
+        return PaperOrderStatus.QUEUED
+    if market_open is None and normalized in QUEUED_PROVIDER_STATUSES:
+        return PaperOrderStatus.QUEUED
+    return PaperOrderStatus.SUBMITTED
 
 
 def _hash_token(value: str, secret: str) -> str:
@@ -173,13 +208,15 @@ class PaperExecutionService:
                 client_order_id=client_order_id,
                 asset_class=expected_alpaca_asset_class(asset.asset_type),
             )
+            market_open = await self._market_is_open()
+            order_status = map_paper_order_status(submitted.status, market_open=market_open)
             prep.status = PreparationStatus.CONFIRMED.value
             prep.confirmed_at = now
             prep.snapshot = {**stored, "confirmed_snapshot": live}
             order = PaperOrder(
                 id=uuid4(),
                 preparation_id=prep.id,
-                status=PaperOrderStatus.SUBMITTED.value,
+                status=order_status.value,
                 provider_order_id=submitted.provider_order_id,
                 client_order_id=client_order_id,
                 submitted_at=now,
@@ -195,10 +232,14 @@ class PaperExecutionService:
             )
             session.add(order)
             await session.commit()
+            queued = order.status == PaperOrderStatus.QUEUED.value
             return {
                 "order_id": str(order.id),
                 "provider_order_id": submitted.provider_order_id,
                 "status": order.status,
+                "provider_status": submitted.status,
+                "queued": queued,
+                "queue_reason": PAPER_QUEUED_MESSAGE if queued else None,
                 "client_order_id": client_order_id,
                 "environment": "SIMULATED PAPER TRADE - NO REAL MONEY",
             }
@@ -225,12 +266,18 @@ class PaperExecutionService:
                     order.status = PaperOrderStatus.CANCELLED.value
                 elif "FAIL" in status or "REJECT" in status:
                     order.status = PaperOrderStatus.FAILED.value
+                elif order.status == PaperOrderStatus.QUEUED.value:
+                    remapped = map_paper_order_status(remote.status, market_open=await self._market_is_open())
+                    if remapped is not PaperOrderStatus.SUBMITTED:
+                        order.status = remapped.value
             order.last_refresh_at = now
             await session.commit()
             return {
                 "order_id": str(order.id),
                 "provider_order_id": order.provider_order_id,
                 "status": order.status,
+                "queued": order.status == PaperOrderStatus.QUEUED.value,
+                "queue_reason": PAPER_QUEUED_MESSAGE if order.status == PaperOrderStatus.QUEUED.value else None,
                 "filled_quantity": str(order.filled_quantity) if order.filled_quantity is not None else None,
                 "fill_price": str(order.fill_price) if order.fill_price is not None else None,
                 "reference_price": (prep.snapshot or {}).get("reference_price") if prep else None,
@@ -261,6 +308,13 @@ class PaperExecutionService:
             raise PaperExecutionError("Ineligible asset type", "INELIGIBLE_ASSET_TYPE")
         qty = evaluation.selected_quantity or lot.remaining_quantity
         quote = await self.providers.quote_for_asset_type(asset.asset_type, asset.canonical_id, asset.symbol, now)
+        assessment = await assess_quote_freshness(
+            quote=quote,
+            as_of=now,
+            max_age_minutes=self.settings.quote_max_age_minutes,
+            asset_type=asset.asset_type,
+            calendar=self.providers.execution,
+        )
         proceeds = (quote.price * qty) if quote else None
         loss = None
         if quote and lot.per_unit_basis is not None:
@@ -285,7 +339,8 @@ class PaperExecutionService:
             "reference_timestamp": quote.source_timestamp.isoformat() if quote else None,
             "quote_retrieved_at": quote.retrieved_at.isoformat() if quote else None,
             "quote_freshness_seconds": quote.freshness_seconds if quote else None,
-            "quote_stale": bool(quote.stale) if quote else True,
+            "quote_stale": not assessment.ok,
+            "quote_context": assessment.context,
             "estimated_proceeds": str(proceeds) if proceeds is not None else None,
             "basis": str(lot.remaining_basis) if lot.remaining_basis is not None else None,
             "estimated_loss": str(loss) if loss is not None else None,
@@ -320,11 +375,24 @@ class PaperExecutionService:
         )
         if ownership:
             raise PaperExecutionError("Alpaca quantity insufficient", ownership.value)
-        if snapshot.get("quote_stale") or not snapshot.get("reference_price"):
-            raise PaperExecutionError("Quote is stale or missing", "STALE_QUOTE")
-        quote_ts = datetime.fromisoformat(snapshot["reference_timestamp"]) if snapshot.get("reference_timestamp") else None
-        if quote_ts is None or (now - quote_ts) > timedelta(minutes=self.settings.quote_max_age_minutes):
-            raise PaperExecutionError("Quote exceeds freshness", "STALE_QUOTE")
+        quote = await self.providers.quote_for_asset_type(asset.asset_type, asset.canonical_id, asset.symbol, now)
+        assessment = await assess_quote_freshness(
+            quote=quote,
+            as_of=now,
+            max_age_minutes=self.settings.quote_max_age_minutes,
+            asset_type=asset.asset_type,
+            calendar=self.providers.execution,
+        )
+        if not assessment.ok or not snapshot.get("reference_price"):
+            code = (assessment.rejection or RejectionCode.STALE_QUOTE).value
+            raise PaperExecutionError(assessment.explanation or "Quote is stale or missing", code)
+
+    async def _market_is_open(self) -> bool | None:
+        try:
+            clock = await self.providers.execution.get_clock()
+        except Exception:
+            return None
+        return bool(clock.is_open)
 
     async def _portfolio_values(self, session, account, as_of) -> tuple[dict, dict]:
         holdings = list(await session.scalars(select(Holding).where(Holding.portfolio_id == account.id)))
