@@ -112,7 +112,8 @@ async def test_mcp_unavailability_is_fail_closed(session, session_factory, setti
     token = await demo.create(USER_A_ID)
     row = await demo.resolve(token)
     with (
-        patch("app.mcp.tools.run_analysis", new=AsyncMock()) as analysis,
+        patch("app.mcp.tools.run_ml_analysis", new=AsyncMock()) as analysis,
+        patch("app.mcp.tools.evaluate_pending_candidates", new=AsyncMock()) as evaluate_pending,
         patch("app.mcp.tools.evaluate_candidate", new=AsyncMock()) as evaluate,
     ):
         result = await run_orchestrator_turn(
@@ -126,6 +127,7 @@ async def test_mcp_unavailability_is_fail_closed(session, session_factory, setti
     assert result["reply"] == MCP_UNAVAILABLE_MESSAGE
     assert "approved" not in result["reply"].lower()
     analysis.assert_not_awaited()
+    evaluate_pending.assert_not_awaited()
     evaluate.assert_not_awaited()
 
 
