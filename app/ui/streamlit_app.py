@@ -13,6 +13,7 @@ import qrcode
 import streamlit as st
 
 from app.ui.confirm_state import confirm_button_enabled, paper_submit_feedback
+from app.ui.statement_upload import collect_statement_pdfs
 
 BACKEND = os.environ.get("BACKEND_URL", "http://localhost:8000")
 PAPER_BANNER = "SIMULATED PAPER TRADE - NO REAL MONEY"
@@ -38,7 +39,28 @@ def _inject_style() -> None:
     st.markdown(
         """
         <style>
-        .stApp {background: linear-gradient(135deg,#f7f9fc 0%,#eef4ff 55%,#f8fbff 100%);}
+        .stApp {background:#f2f7ff;color:#081426;}
+        [data-testid="stHeader"] {background:#f2f7ff;}
+        [data-testid="stAppViewContainer"] .main,
+        [data-testid="stAppViewContainer"] .main h1,
+        [data-testid="stAppViewContainer"] .main h2,
+        [data-testid="stAppViewContainer"] .main h3,
+        [data-testid="stAppViewContainer"] .main p,
+        [data-testid="stAppViewContainer"] .main label,
+        [data-testid="stAppViewContainer"] .main [data-testid="stMarkdown"],
+        [data-testid="stAppViewContainer"] .main [data-testid="stCaptionContainer"],
+        [data-testid="stAppViewContainer"] .main [data-testid="stCaptionContainer"] *,
+        [data-testid="stAppViewContainer"] .main [data-testid="stFileUploader"] label,
+        [data-testid="stAppViewContainer"] .main [data-testid="stFileUploader"] p,
+        [data-testid="stAppViewContainer"] .main [data-testid="stFileUploader"] small,
+        [data-testid="stAppViewContainer"] .main [data-testid="stTextInput"] label,
+        [data-testid="stAppViewContainer"] .main [data-testid="stWidgetLabel"] p {
+            color:#081426;
+        }
+        [data-testid="stAppViewContainer"] .main .hero,
+        [data-testid="stAppViewContainer"] .main .hero h1 {color:#ffffff;}
+        [data-testid="stAppViewContainer"] .main .hero p {color:#d8e6ff;}
+        [data-testid="stAppViewContainer"] .main .eyebrow {color:#62e6d3;}
         [data-testid="stSidebar"] {background:#081426; color:#fff; border-right:1px solid #17263d;}
         [data-testid="stSidebar"] * {color:#e8efff;}
         [data-testid="stSidebar"] [role="radiogroup"] label {
@@ -365,6 +387,22 @@ def _post(path: str, json: dict | None = None, files=None):
         return None
 
 
+def _ingest_statement_pdf(filename: str, data: bytes) -> dict:
+    try:
+        response = httpx.post(
+            f"{BACKEND}/api/statements",
+            headers=_headers(),
+            files={"file": (filename, data, "application/pdf")},
+            timeout=60.0,
+        )
+        if response.status_code >= 400:
+            return {"filename": filename, "ok": False, "status": "failed", "error": response.text}
+        payload = response.json()
+        return {"filename": filename, "ok": True, **payload}
+    except httpx.HTTPError as exc:
+        return {"filename": filename, "ok": False, "status": "failed", "error": f"Backend unavailable: {exc}"}
+
+
 def _resume_orchestrator() -> None:
     if st.session_state.get("orchestrator_session_id"):
         return
@@ -545,7 +583,7 @@ def main() -> None:
         "Pages",
         [
             "Portfolio overview",
-            "Bank statement upload",
+            "Statement upload",
             "Statement questions",
             "Spending anomalies",
             "Portfolio analysis",
@@ -587,32 +625,60 @@ def main() -> None:
                 hide_index=True,
             )
         st.caption("Authoritative values are reloaded from PostgreSQL; conversation memory is never a financial source of truth.")
-    elif page == "Bank statement upload":
-        with st.form("bank_statement_upload_form", clear_on_submit=True):
-            uploaded = st.file_uploader("Bank statement PDF", type=["pdf"])
-            submitted = st.form_submit_button("Ingest statement")
+    elif page == "Statement upload":
+        st.header("Bank and brokerage statement upload")
+        st.caption("Upload a folder of PDFs, or select multiple files. Bank and brokerage statements are detected automatically from the document.")
+        with st.form("statement_upload_form", clear_on_submit=True):
+            uploaded = st.file_uploader(
+                "Statement PDFs",
+                type=["pdf"],
+                accept_multiple_files=True,
+                help="Select every PDF in a folder. Bank and brokerage statements can be mixed.",
+            )
+            folder = st.text_input(
+                "Or ingest every PDF in a local folder",
+                placeholder=r"C:\statements\demo  or  /app/local-data",
+            )
+            submitted = st.form_submit_button("Ingest statements")
 
-        if uploaded is not None and submitted:
-            if uploaded.type and uploaded.type.lower() != "application/pdf":
-                st.error("Only PDF files can be uploaded.")
+        if submitted:
+            items, warnings = collect_statement_pdfs(uploads=uploaded, folder=folder)
+            for warning in warnings:
+                st.warning(warning)
+            if not items:
+                st.warning("Choose one or more PDFs, or a folder that contains PDF statements.")
             else:
-                files = {"file": (uploaded.name, uploaded.getvalue(), "application/pdf")}
-                result = _post("/api/statements", files=files)
-                if result:
-                    if result.get("status") == "duplicate":
-                        st.info("This statement was already imported, so no transactions were duplicated.")
-                    else:
-                        st.success("Statement imported successfully. Its transactions are now available for questions and analysis.")
-                    _status_cards([
-                        {"label": "Document type", "value": _friendly_code(result.get("format")), "meta": "Detected parser format"},
-                        {"label": "Import result", "value": _friendly_code(result.get("status")), "meta": "Persisted ingestion status", "variant": "success"},
-                    ])
-                    with st.expander("Import audit details"):
-                        st.json(result)
-                else:
-                    st.error("Upload failed. Please confirm the PDF is valid and the backend is reachable.")
-        elif submitted and uploaded is None:
-            st.warning("Choose a PDF file before ingesting.")
+                results = [_ingest_statement_pdf(name, data) for name, data in items]
+                ingested = sum(1 for row in results if row.get("status") == "ingested")
+                duplicates = sum(1 for row in results if row.get("status") == "duplicate")
+                failed = sum(1 for row in results if not row.get("ok"))
+                banks = sum(1 for row in results if row.get("format") == "SYNTHETIC_BANK_V1")
+                brokerages = sum(1 for row in results if row.get("format") == "SYNTHETIC_BROKERAGE_V1")
+                _status_cards([
+                    {"label": "Imported", "value": ingested, "meta": "New statements persisted", "variant": "success" if ingested else None},
+                    {"label": "Already imported", "value": duplicates, "meta": "Duplicates were skipped"},
+                    {"label": "Bank / brokerage", "value": f"{banks} / {brokerages}", "meta": "Detected parser formats"},
+                    {"label": "Failed", "value": failed, "meta": "Rejected or unreachable", "variant": "warning" if failed else None},
+                ])
+                st.dataframe(
+                    [
+                        {
+                            "File": row.get("filename"),
+                            "Type": _friendly_code(row.get("format")),
+                            "Result": _friendly_code(row.get("status")),
+                            "Detail": row.get("error") or row.get("statement_id") or "",
+                        }
+                        for row in results
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                if failed:
+                    st.error("Some statements could not be imported. Check the detail column.")
+                elif ingested:
+                    st.success("Statements imported. Transactions and lots are available for questions and analysis.")
+                elif duplicates:
+                    st.info("These statements were already imported, so no rows were duplicated.")
     elif page == "Statement questions":
         st.header("Ask your financial data")
         st.caption("Ask naturally about statement-derived spending, anomaly signals, portfolio risk, allocation drift, and safely evaluated tax-loss opportunities.")
