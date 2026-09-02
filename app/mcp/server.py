@@ -45,6 +45,11 @@ def build_mcp(container: AppContainer):
         return await handlers.evaluate_candidate_tool(candidate_id)
 
     @mcp.tool()
+    async def evaluate_pending_candidates(user_id: str, analysis_run_id: str = "") -> dict:
+        """Evaluate every pending harvesting candidate and persist approved or rejected status."""
+        return await handlers.evaluate_pending_candidates_tool(user_id, analysis_run_id)
+
+    @mcp.tool()
     async def get_spending_summary(user_id: str) -> dict:
         return await handlers.get_spending_summary(user_id)
 

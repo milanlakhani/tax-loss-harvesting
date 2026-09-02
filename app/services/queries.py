@@ -166,6 +166,8 @@ class QueryService:
         rows = list(await self.session.scalars(select(HarvestingCandidate).where(HarvestingCandidate.analysis_run_id == analysis_run_id)))
         out = []
         for row in rows:
+            if row.status == CandidateStatus.PENDING_EVALUATION.value:
+                continue
             if approved and row.status != CandidateStatus.APPROVED.value:
                 continue
             if not approved and row.status == CandidateStatus.APPROVED.value:

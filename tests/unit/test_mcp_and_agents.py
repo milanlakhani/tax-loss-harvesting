@@ -29,7 +29,8 @@ def test_mcp_exposes_analysis_tools_but_not_submission():
     assert agents_cannot_submit() is True
     assert "submit_paper_order" not in agent_tool_allowlist()
     assert "Never substitute LLM opinion" in EVAL_INSTRUCTIONS
-    assert MCP_TOOL_PARAMETERS["run_analysis"] == ("user_id", "idempotency_key")
+    assert "evaluate_pending_candidates" in MCP_TOOL_NAMES
+    assert MCP_TOOL_PARAMETERS["evaluate_pending_candidates"] == ("user_id", "analysis_run_id")
 
 
 @pytest.mark.unit
@@ -64,14 +65,43 @@ async def test_problem_statement_questions_route_to_authoritative_tools():
     handlers.get_latest_candidate_decisions.return_value = {"found": True, "approved": [], "protected": [{"rejection_code": "WASH_SALE_CONFLICT"}]}
 
     await _route(handlers, "user-id", "Show my unusual spending.")
-    risk = await _route(handlers, "user-id", "Is my portfolio within its risk limits?")
-    drift = await _route(handlers, "user-id", "How far is my portfolio from its target allocation?")
-    opportunities = await _route(handlers, "user-id", "Do I have any safe tax-loss opportunities?")
+    risk, risk_agents = await _route(handlers, "user-id", "Is my portfolio within its risk limits?")
+    drift, drift_agents = await _route(handlers, "user-id", "How far is my portfolio from its target allocation?")
+    opportunities, harvest_agents = await _route(handlers, "user-id", "Do I have any safe tax-loss opportunities?")
 
     handlers.get_anomalous_transactions.assert_awaited_once_with("user-id")
     assert "Needs review" in risk and "Maximum equities" in risk
     assert "Current" in drift and "+10.0%" in drift
     assert "valid fail-closed result" in opportunities
+    assert "ML Analysis Agent" in risk_agents and "ML Analysis Agent" in drift_agents
+    assert "Eval Agent" in harvest_agents
+    handlers.get_latest_candidate_decisions.assert_awaited()
+    handlers.run_analysis_tool.assert_not_awaited()
+
+
+@pytest.mark.unit
+async def test_analysis_route_runs_ml_then_eval_before_reporting():
+    handlers = AsyncMock()
+    handlers.run_analysis_tool.return_value = {"analysis_run_id": "run-1", "status": "RUNNING", "evaluated": False}
+    handlers.evaluate_pending_candidates_tool.return_value = {
+        "found": True,
+        "status": "COMPLETED",
+        "evaluated": True,
+        "approved_candidate_ids": ["c1"],
+    }
+    handlers.get_latest_candidate_decisions.return_value = {
+        "found": True,
+        "approved": [{"rank": 1, "symbol": "VTI", "selected_quantity": "10", "estimated_loss": "100"}],
+        "protected": [],
+    }
+    reply, invoked = await _route(handlers, "user-id", "Please run analysis")
+    handlers.run_analysis_tool.assert_awaited_once()
+    handlers.evaluate_pending_candidates_tool.assert_awaited_once()
+    handlers.get_latest_candidate_decisions.assert_awaited_once()
+    assert "ML Analysis Agent" in invoked
+    assert "Eval Agent" in invoked
+    assert "VTI" in reply
+    assert "RUNNING" not in reply
 
 
 @pytest.mark.unit

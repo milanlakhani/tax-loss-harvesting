@@ -18,10 +18,14 @@
 - **parsers** — deterministic PyMuPDF parsers.
 - **mcp** — standalone FastMCP Streamable HTTP process (`/mcp` on port 8001). Thin typed wrappers
   around application services. Not mounted on FastAPI. Not reachable from the browser or Streamlit.
-- **agents** — Orchestrator, Document Parsing, ML Analysis, and Eval agents in the backend call MCP
-  over `MCP_SERVER_URL` (Compose: `http://mcp:8001/mcp`; AWS sidecar: `http://127.0.0.1:8001/mcp`).
-  The Eval agent cannot substitute LLM opinion for a rule. The Orchestrator only reports persisted
-  candidate statuses. MCP unavailability is fail-closed and cannot skip safety evaluation.
+- **agents** — Orchestrator, Document Parsing, ML Analysis, and Eval agents in the backend.
+  Upload calls the Document Parsing Agent synchronously (same pipeline as MCP `parse_statement`).
+  Analysis calls the ML Analysis Agent to write pending candidates and anomaly scores, then the
+  Eval Agent to persist approved/rejected status. Chat uses the Orchestrator with SDK handoffs to
+  the three specialists; tools call MCP over `MCP_SERVER_URL` (Compose: `http://mcp:8001/mcp`;
+  AWS sidecar: `http://127.0.0.1:8001/mcp`). The Eval agent cannot substitute LLM opinion for a
+  rule. The Orchestrator only reports persisted candidate statuses and never raw ML output.
+  MCP unavailability is fail-closed and cannot skip safety evaluation.
 - **api** — FastAPI health, statements, analyses, paper-order prepare/confirm/refresh, demo sessions,
   orchestrator sessions. FastAPI does **not** serve `/mcp`. Browser and agents submit only server-issued IDs and the confirmation token.
 - **ui** — Streamlit (separate Compose container). Confirmation requires an unchecked review box and
@@ -31,8 +35,8 @@
 
 ## Application entry point
 
-`run_analysis(user_id, trigger, as_of, idempotency_key)` remains the analysis service used by FastAPI
-and the CLI.
+`run_analysis(user_id, trigger, as_of, idempotency_key)` remains the CLI/test facade (ML propose then
+Eval). FastAPI analysis uses `complete_analysis_via_agents` so both specialist agents run.
 
 `PaperExecutionService.prepare(candidate_id, demo_session_token)` and `.confirm(candidate_id, token,
 demo_session_token)` are the only paper-order paths. Confirmation with `ENABLE_PAPER_ORDERS=false`
@@ -89,7 +93,9 @@ PostgreSQL to RDS, HTTPS to providers/AWS APIs/ECR, and DNS — not “ECS-to-RD
 
 Demo-session binding protects paper-order confirmation. Orchestrator sessions persist SDK conversation
 items per `(user_id, demo_session_id)` with at most one ACTIVE row. Remembered tool output is never
-treated as financial source of truth.
+treated as financial source of truth. Chat uses the Orchestrator with handoffs to Document Parsing,
+ML Analysis, and Eval; a post-turn Eval hook persists any leftover pending candidates before the
+user can see them.
 
 ## Harvesting and paper execution
 

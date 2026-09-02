@@ -103,7 +103,7 @@ Status is complete only when the behavior is implemented and covered by tests, n
 | FastAPI does not mount `/mcp`; agents use `MCP_SERVER_URL` over HTTP | `app/main.py`, `app/agents/mcp_client.py` | `test_mcp_split.py`, `test_mcp_http.py` |
 | No submit/confirm/prepare/Alpaca SDK via MCP | `FORBIDDEN_MCP_TOOLS` | agents cannot submit |
 | MCP unavailability is fail-closed; cannot skip safety evaluation | `McpUnavailableError`, `/health/ready` | `test_mcp_unavailability_is_fail_closed` |
-| Orchestrator / Parser / ML / Eval agents call MCP only | `app/agents/` | unit + session tests |
+| Orchestrator / Parser / ML / Eval agents are invoked on their paths; chat uses SDK handoffs | `app/agents/` | unit + session tests |
 | Persistent per-user Orchestrator sessions; resume/reset/close; isolation | `OrchestratorSessionService` | `test_orchestrator_sessions.py` |
 | Conversation not source of truth; no secrets/PDFs stored | session sanitization + MCP on every query | session + MCP tests |
 | FastAPI upload, analysis, approved/rejected candidates, prepare, confirm, on-demand refresh | `app/api/*` | phase2 flow + paper tests |

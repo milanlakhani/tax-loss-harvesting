@@ -2,21 +2,16 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.agents.definitions import build_runtime_agents
+from app.agents.specialists import (
+    DOC_PARSING_AGENT,
+    EVAL_AGENT,
+    ML_ANALYSIS_AGENT,
+    ORCHESTRATOR_AGENT,
+)
 from app.container import AppContainer
 from app.domain.errors import MCP_UNAVAILABLE_MESSAGE, McpUnavailableError
 from app.services.orchestrator_sessions import OrchestratorSessionService
-
-
-LLM_INSTRUCTIONS = """
-You are Northstar Wealth Copilot, a concise and approachable personal-finance assistant.
-Answer in plain English for a non-technical user. For every question about the user's
-financial data, call one or more provided tools on this turn; never rely on conversation
-memory for balances, transactions, holdings, anomalies, or analysis status. Clearly
-distinguish facts from general education. Do not provide individualized tax or legal advice.
-Never prepare, confirm, or submit an order. Never override or reinterpret a persisted
-wash-sale, risk, freshness, or execution decision. Explain such decisions as recorded.
-Use short paragraphs and bullets where helpful. Include currency and relevant dates.
-"""
 
 
 async def run_orchestrator_turn(
@@ -36,10 +31,17 @@ async def run_orchestrator_turn(
     try:
         if container.settings.enable_llm_orchestrator and container.settings.openai_api_key:
             try:
-                reply = await _run_llm(
+                reply, invoked = await _run_llm(
                     handlers, str(user_id), message, sdk, container.settings.openai_model
                 )
-                return {"session_id": str(active.id), "reply": reply, "authoritative": True, "mode": "llm"}
+                invoked = await _ensure_eval(handlers, str(user_id), invoked)
+                return {
+                    "session_id": str(active.id),
+                    "reply": reply,
+                    "authoritative": True,
+                    "mode": "llm",
+                    "agents_invoked": invoked,
+                }
             except McpUnavailableError:
                 return _mcp_unavailable(str(active.id))
             except Exception:
@@ -47,9 +49,16 @@ async def run_orchestrator_turn(
                 # Do not expose provider error details or credentials to the user.
                 pass
         await sdk.add_items([{"role": "user", "content": message}])
-        reply = await _route(handlers, str(user_id), message)
+        reply, invoked = await _route(handlers, str(user_id), message)
+        invoked = await _ensure_eval(handlers, str(user_id), invoked)
         await sdk.add_items([{"role": "assistant", "content": reply}])
-        return {"session_id": str(active.id), "reply": reply, "authoritative": True, "mode": "deterministic_fallback"}
+        return {
+            "session_id": str(active.id),
+            "reply": reply,
+            "authoritative": True,
+            "mode": "deterministic_fallback",
+            "agents_invoked": invoked,
+        }
     except McpUnavailableError:
         return _mcp_unavailable(str(active.id))
 
@@ -60,135 +69,101 @@ def _mcp_unavailable(session_id: str) -> dict:
         "reply": MCP_UNAVAILABLE_MESSAGE,
         "authoritative": False,
         "mode": "mcp_unavailable",
+        "agents_invoked": [ORCHESTRATOR_AGENT],
     }
 
 
-async def _run_llm(handlers, user_id: str, message: str, sdk, model: str) -> str:
-    from agents import Agent, Runner, function_tool
+async def _ensure_eval(handlers, user_id: str, invoked: list[str]) -> list[str]:
+    """Eval must persist statuses after ML writes candidates; the model cannot skip this."""
+    result = await handlers.evaluate_pending_candidates_tool(user_id, "")
+    if result.get("evaluated") and not result.get("reused") and EVAL_AGENT not in invoked:
+        return [*invoked, EVAL_AGENT]
+    return invoked
 
-    @function_tool
-    async def get_holdings() -> list[dict]:
-        """Get the current user's authoritative portfolio holdings."""
-        return await handlers.get_holdings(user_id)
 
-    @function_tool
-    async def get_spending_summary() -> dict:
-        """Calculate the current user's authoritative spending summary."""
-        return await handlers.get_spending_summary(user_id)
+def _agents_from_run(result) -> list[str]:
+    names = [ORCHESTRATOR_AGENT]
+    for item in getattr(result, "new_items", []) or []:
+        name = getattr(item, "agent_name", None) or getattr(getattr(item, "agent", None), "name", None)
+        if isinstance(name, str) and name not in names:
+            names.append(name)
+        raw = getattr(item, "raw_item", None)
+        target = getattr(raw, "name", None) if raw is not None else None
+        if isinstance(target, str):
+            for specialist in (DOC_PARSING_AGENT, ML_ANALYSIS_AGENT, EVAL_AGENT):
+                if specialist.lower() in target.lower().replace("_", " ") and specialist not in names:
+                    names.append(specialist)
+    return names
 
-    @function_tool
-    async def get_income_summary() -> dict:
-        """Calculate the current user's authoritative income summary."""
-        return await handlers.get_income_summary(user_id)
 
-    @function_tool
-    async def get_cashflow_summary() -> dict:
-        """Calculate authoritative income, spending, and net cash flow."""
-        return await handlers.get_cashflow_summary(user_id)
+async def _run_llm(handlers, user_id: str, message: str, sdk, model: str) -> tuple[str, list[str]]:
+    from agents import Runner
 
-    @function_tool
-    async def get_category_breakdown() -> dict:
-        """Get authoritative spending totals grouped by category."""
-        return await handlers.get_category_breakdown(user_id)
-
-    @function_tool
-    async def get_merchant_summary() -> dict:
-        """Get authoritative spending totals grouped by merchant."""
-        return await handlers.get_merchant_summary(user_id)
-
-    @function_tool
-    async def get_largest_transactions() -> dict:
-        """Get the user's largest authoritative statement transactions."""
-        return await handlers.get_largest_transactions(user_id)
-
-    @function_tool
-    async def get_anomalous_transactions() -> list[dict]:
-        """Get transactions flagged by the persisted anomaly model."""
-        return await handlers.get_anomalous_transactions(user_id)
-
-    @function_tool
-    async def get_portfolio_insights() -> list[dict]:
-        """Get current allocation, target drift, and configured portfolio risk limits."""
-        return await handlers.get_portfolio_insights(user_id)
-
-    @function_tool
-    async def get_latest_candidate_decisions() -> dict:
-        """Get only persisted final approved and protected tax-loss decisions."""
-        return await handlers.get_latest_candidate_decisions(user_id)
-
-    @function_tool
-    async def run_portfolio_analysis() -> dict:
-        """Run the deterministic portfolio analysis and safety evaluation pipeline."""
-        from uuid import uuid4
-
-        return await handlers.run_analysis_tool(user_id, f"agent-{uuid4().hex}")
-
-    agent = Agent(
-        name="Northstar Wealth Copilot",
-        model=model,
-        instructions=LLM_INSTRUCTIONS,
-        tools=[
-            get_holdings,
-            get_spending_summary,
-            get_income_summary,
-            get_cashflow_summary,
-            get_category_breakdown,
-            get_merchant_summary,
-            get_largest_transactions,
-            get_anomalous_transactions,
-            get_portfolio_insights,
-            get_latest_candidate_decisions,
-            run_portfolio_analysis,
-        ],
+    orchestrator, parser, ml, evaluator = build_runtime_agents(
+        handlers=handlers, user_id=user_id, model=model
     )
-    # Persist only plain user/assistant text. Tool inputs and outputs are deliberately
-    # not reused as financial truth; the instructions require fresh tool calls each turn.
+    _ = (parser, ml, evaluator)
     history = await sdk.get_items(limit=20)
-    result = await Runner.run(agent, [*history, {"role": "user", "content": message}], max_turns=6)
+    result = await Runner.run(orchestrator, [*history, {"role": "user", "content": message}], max_turns=12)
     reply = str(result.final_output)
     await sdk.add_items([{"role": "user", "content": message}, {"role": "assistant", "content": reply}])
-    return reply
+    return reply, _agents_from_run(result)
 
 
-async def _route(handlers, user_id: str, message: str) -> str:
+async def _route(handlers, user_id: str, message: str) -> tuple[str, list[str]]:
     text = message.lower()
+    invoked = [ORCHESTRATOR_AGENT]
     if "hold" in text:
         holdings = await handlers.get_holdings(user_id)
         if not holdings:
-            return "No holdings were found for this portfolio."
+            return "No holdings were found for this portfolio.", invoked
         symbols = ", ".join(str(item.get("symbol") or "Unknown") for item in holdings[:8])
         suffix = f" and {len(holdings) - 8} more" if len(holdings) > 8 else ""
-        return f"You currently have {len(holdings)} positions. The portfolio includes {symbols}{suffix}. Open Portfolio overview for quantities and account details."
-    if "anomal" in text:
-        return _plain_anomalies(await handlers.get_anomalous_transactions(user_id))
-    if "unusual" in text and "spend" in text:
-        return _plain_anomalies(await handlers.get_anomalous_transactions(user_id))
+        return (
+            f"You currently have {len(holdings)} positions. The portfolio includes {symbols}{suffix}. Open Portfolio overview for quantities and account details.",
+            invoked,
+        )
+    if "anomal" in text or ("unusual" in text and "spend" in text):
+        invoked.append(ML_ANALYSIS_AGENT)
+        return _plain_anomalies(await handlers.get_anomalous_transactions(user_id)), invoked
     if "risk" in text:
-        return _plain_portfolio_insights(await handlers.get_portfolio_insights(user_id), focus="risk")
+        invoked.append(ML_ANALYSIS_AGENT)
+        return _plain_portfolio_insights(await handlers.get_portfolio_insights(user_id), focus="risk"), invoked
     if "drift" in text or "target allocation" in text:
-        return _plain_portfolio_insights(await handlers.get_portfolio_insights(user_id), focus="drift")
+        invoked.append(ML_ANALYSIS_AGENT)
+        return _plain_portfolio_insights(await handlers.get_portfolio_insights(user_id), focus="drift"), invoked
+    if "analy" in text:
+        invoked.append(ML_ANALYSIS_AGENT)
+        await handlers.run_analysis_tool(user_id, f"orch-{user_id}")
+        invoked.append(EVAL_AGENT)
+        await handlers.evaluate_pending_candidates_tool(user_id, "")
+        decisions = await handlers.get_latest_candidate_decisions(user_id)
+        return _plain_candidate_decisions(decisions), invoked
     if "tax-loss" in text or "harvest" in text or "opportun" in text or "wash-sale" in text or "wash sale" in text:
+        invoked.append(EVAL_AGENT)
         return _plain_candidate_decisions(
             await handlers.get_latest_candidate_decisions(user_id),
             wash_sale_only="wash" in text,
-        )
+        ), invoked
     if "spend" in text:
-        return _plain_statistic("spending", await handlers.get_spending_summary(user_id))
-    if "analy" in text:
-        result = await handlers.run_analysis_tool(user_id, f"orch-{user_id}")
-        approved = len(result.get("approved_candidate_ids") or [])
-        return f"The portfolio analysis finished with status **{str(result.get('status', 'unknown')).title()}**. The model status is **{str(result.get('ml_status') or 'not available').title()}**, and {approved} candidate{'s' if approved != 1 else ''} passed every safety rule."
+        invoked.append(ML_ANALYSIS_AGENT)
+        return _plain_statistic("spending", await handlers.get_spending_summary(user_id)), invoked
     if "income" in text:
-        return _plain_statistic("income", await handlers.get_income_summary(user_id))
+        invoked.append(ML_ANALYSIS_AGENT)
+        return _plain_statistic("income", await handlers.get_income_summary(user_id)), invoked
     if "cash" in text:
-        return _plain_statistic("net cash flow", await handlers.get_cashflow_summary(user_id))
+        invoked.append(ML_ANALYSIS_AGENT)
+        return _plain_statistic("net cash flow", await handlers.get_cashflow_summary(user_id)), invoked
     if "categor" in text:
-        return _plain_breakdown("Top spending categories", await handlers.get_category_breakdown(user_id))
+        invoked.append(ML_ANALYSIS_AGENT)
+        return _plain_breakdown("Top spending categories", await handlers.get_category_breakdown(user_id)), invoked
     if "merchant" in text:
-        return _plain_breakdown("Top merchants", await handlers.get_merchant_summary(user_id))
+        invoked.append(ML_ANALYSIS_AGENT)
+        return _plain_breakdown("Top merchants", await handlers.get_merchant_summary(user_id)), invoked
     if "largest" in text or "biggest" in text:
-        return _plain_largest(await handlers.get_largest_transactions(user_id))
-    return "Ask about holdings, spending, anomalies, or analysis. Order submission is not available through agents."
+        invoked.append(ML_ANALYSIS_AGENT)
+        return _plain_largest(await handlers.get_largest_transactions(user_id)), invoked
+    return "Ask about holdings, spending, anomalies, or analysis. Order submission is not available through agents.", invoked
 
 
 def _plain_statistic(label: str, result: dict) -> str:

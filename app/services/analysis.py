@@ -31,7 +31,6 @@ from app.persistence.models import (
     Holding,
     PortfolioAccount,
     PortfolioAnalysisLock,
-    TargetAllocation,
     TaxLot,
 )
 from app.providers.protocols import ProviderRouter
@@ -43,7 +42,6 @@ from app.services.harvesting import (
     harvesting_target,
     select_against_target,
 )
-from app.services.portfolio import class_weights
 
 
 @dataclass
@@ -87,7 +85,33 @@ async def run_analysis(
     idempotency_key: str,
     deps: AnalysisDependencies,
 ) -> AnalysisRunResult:
-    """Application-level analysis entry point used by FastAPI and the CLI."""
+    """Facade used by CLI and tests: ML Analysis writes candidates, Eval then persists statuses."""
+    proposed = await run_ml_analysis(
+        user_id,
+        trigger=trigger,
+        as_of=as_of,
+        idempotency_key=idempotency_key,
+        deps=deps,
+    )
+    if proposed.status in {AnalysisRunStatus.COMPLETED, AnalysisRunStatus.FAILED}:
+        return proposed
+    return await evaluate_pending_candidates(
+        user_id,
+        deps=deps,
+        as_of=as_of,
+        analysis_run_id=proposed.analysis_run_id,
+    )
+
+
+async def run_ml_analysis(
+    user_id: UUID,
+    *,
+    trigger: AnalysisTrigger,
+    as_of: datetime,
+    idempotency_key: str,
+    deps: AnalysisDependencies,
+) -> AnalysisRunResult:
+    """ML Analysis Agent pipeline: windows, anomalies, and pending harvesting candidates only."""
     settings = deps.settings
     now = deps.clock.now()
     as_of = as_of.astimezone(UTC) if as_of.tzinfo else as_of.replace(tzinfo=UTC)
@@ -104,6 +128,9 @@ async def run_analysis(
                 raise IdempotencyConflictError()
             if existing.status in {AnalysisRunStatus.COMPLETED.value, AnalysisRunStatus.FAILED.value}:
                 cids, eids, aids = await _collect_ids(session, existing.id)
+                return _to_result(existing, True, cids, eids, aids)
+            cids, eids, aids = await _collect_ids(session, existing.id)
+            if cids:
                 return _to_result(existing, True, cids, eids, aids)
             run = existing
         else:
@@ -160,7 +187,7 @@ async def run_analysis(
 
     for portfolio in portfolios:
         try:
-            await _analyze_portfolio(
+            await _propose_portfolio_candidates(
                 deps,
                 harvesting,
                 sync,
@@ -212,18 +239,102 @@ async def run_analysis(
         run = await session.get(AnalysisRun, run.id)
         assert run is not None
         run.ml_status = ml_status.value
-        run.finished_at = deps.clock.now()
         if failure:
+            run.finished_at = deps.clock.now()
             run.status = AnalysisRunStatus.FAILED.value
             run.failure_reason = failure[:2000]
-        else:
-            run.status = AnalysisRunStatus.COMPLETED.value
         await session.commit()
         cids, eids, aids = await _collect_ids(session, run.id)
         return _to_result(run, False, cids, eids, aids)
 
 
-async def _analyze_portfolio(
+async def evaluate_pending_candidates(
+    user_id: UUID,
+    *,
+    deps: AnalysisDependencies,
+    as_of: datetime,
+    analysis_run_id: UUID | None = None,
+) -> AnalysisRunResult:
+    """Eval Agent pipeline: consume pending candidates and persist approved/rejected status."""
+    as_of = as_of.astimezone(UTC) if as_of.tzinfo else as_of.replace(tzinfo=UTC)
+    now = deps.clock.now()
+    harvesting = HarvestingService(deps.settings, deps.providers, ConflictService(deps.settings))
+    async with deps.session_factory() as session:
+        run = await _eval_target_run(session, user_id, analysis_run_id)
+        if run is None:
+            raise KeyError("No analysis run is waiting for evaluation")
+        if run.status == AnalysisRunStatus.COMPLETED.value:
+            cids, eids, aids = await _collect_ids(session, run.id)
+            return _to_result(run, True, cids, eids, aids)
+        if run.status == AnalysisRunStatus.FAILED.value:
+            cids, eids, aids = await _collect_ids(session, run.id)
+            return _to_result(run, True, cids, eids, aids)
+        run_id = run.id
+        run_as_of = run.as_of if run.as_of.tzinfo else run.as_of.replace(tzinfo=UTC)
+        portfolio_ids = list(
+            {
+                row.portfolio_id
+                for row in await session.scalars(
+                    select(HarvestingCandidate).where(HarvestingCandidate.analysis_run_id == run_id)
+                )
+            }
+        )
+        if not portfolio_ids:
+            portfolio_ids = [
+                row.id
+                for row in await session.scalars(
+                    select(PortfolioAccount).where(
+                        PortfolioAccount.user_id == user_id,
+                        PortfolioAccount.account_type == AccountType.BROKERAGE.value,
+                    )
+                )
+            ]
+
+    for portfolio_id in portfolio_ids:
+        await _evaluate_and_rank_portfolio(
+            deps,
+            harvesting,
+            run_id=run_id,
+            portfolio_id=portfolio_id,
+            as_of=run_as_of,
+            now=now,
+        )
+
+    async with deps.session_factory() as session:
+        run = await session.get(AnalysisRun, run_id)
+        assert run is not None
+        run.finished_at = deps.clock.now()
+        run.status = AnalysisRunStatus.COMPLETED.value
+        await session.commit()
+        cids, eids, aids = await _collect_ids(session, run.id)
+        return _to_result(run, False, cids, eids, aids)
+
+
+async def _eval_target_run(session: AsyncSession, user_id: UUID, analysis_run_id: UUID | None) -> AnalysisRun | None:
+    if analysis_run_id is not None:
+        run = await session.get(AnalysisRun, analysis_run_id)
+        if run is None or run.user_id != user_id:
+            return None
+        return run
+    running = (
+        await session.scalars(
+            select(AnalysisRun)
+            .where(AnalysisRun.user_id == user_id, AnalysisRun.status == AnalysisRunStatus.RUNNING.value)
+            .order_by(AnalysisRun.started_at.desc())
+        )
+    ).first()
+    if running is not None:
+        return running
+    return (
+        await session.scalars(
+            select(AnalysisRun)
+            .where(AnalysisRun.user_id == user_id)
+            .order_by(AnalysisRun.started_at.desc())
+        )
+    ).first()
+
+
+async def _propose_portfolio_candidates(
     deps: AnalysisDependencies,
     harvesting: HarvestingService,
     sync: WindowSyncService,
@@ -257,19 +368,10 @@ async def _analyze_portfolio(
             for asset in await session.scalars(select(Asset).where(Asset.id.in_({lot.asset_id for lot in lots} or {uuid4()})))
         }
         holdings = list(await session.scalars(select(Holding).where(Holding.portfolio_id == portfolio.id)))
-        class_of: dict[str, str] = {}
-        asset_values: dict[str, Decimal] = {}
         for holding in holdings:
             asset = await session.get(Asset, holding.asset_id)
             if asset is None:
                 continue
-            quote = await deps.providers.quote_for_asset_type(asset.asset_type, asset.canonical_id, asset.symbol, as_of)
-            value = (quote.price * holding.quantity) if quote else Decimal("0")
-            asset_values[asset.canonical_id] = asset_values.get(asset.canonical_id, Decimal("0")) + value
-            if asset.asset_type == "ETF" and asset.symbol in {"BND", "AGG", "TLT"}:
-                class_of[asset.canonical_id] = "BOND"
-            else:
-                class_of[asset.canonical_id] = asset.asset_type
             try:
                 await sync.sync_price_window(
                     canonical_id=asset.canonical_id,
@@ -285,15 +387,49 @@ async def _analyze_portfolio(
                 # Do not advance window meta; continue other assets.
                 continue
 
-        candidates = await harvesting.persist_pending_candidates(session, run_id, lots, assets)
+        await harvesting.persist_pending_candidates(session, run_id, lots, assets)
         await session.commit()
 
+
+async def _holding_valuations(
+    session: AsyncSession,
+    providers: ProviderRouter,
+    portfolio_id: UUID,
+    as_of: datetime,
+) -> tuple[dict[str, Decimal], dict[str, str]]:
+    holdings = list(await session.scalars(select(Holding).where(Holding.portfolio_id == portfolio_id)))
+    asset_values: dict[str, Decimal] = {}
+    class_of: dict[str, str] = {}
+    for holding in holdings:
+        asset = await session.get(Asset, holding.asset_id)
+        if asset is None:
+            continue
+        quote = await providers.quote_for_asset_type(asset.asset_type, asset.canonical_id, asset.symbol, as_of)
+        value = (quote.price * holding.quantity) if quote else Decimal("0")
+        asset_values[asset.canonical_id] = asset_values.get(asset.canonical_id, Decimal("0")) + value
+        if asset.asset_type == "ETF" and asset.symbol in {"BND", "AGG", "TLT"}:
+            class_of[asset.canonical_id] = "BOND"
+        else:
+            class_of[asset.canonical_id] = asset.asset_type
+    return asset_values, class_of
+
+
+async def _evaluate_and_rank_portfolio(
+    deps: AnalysisDependencies,
+    harvesting: HarvestingService,
+    *,
+    run_id: UUID,
+    portfolio_id: UUID,
+    as_of: datetime,
+    now: datetime,
+) -> None:
     async with deps.session_factory() as session:
+        asset_values, class_of = await _holding_valuations(session, deps.providers, portfolio_id, as_of)
         pending = list(
             await session.scalars(
                 select(HarvestingCandidate).where(
                     HarvestingCandidate.analysis_run_id == run_id,
-                    HarvestingCandidate.portfolio_id == portfolio.id,
+                    HarvestingCandidate.portfolio_id == portfolio_id,
                     HarvestingCandidate.status == CandidateStatus.PENDING_EVALUATION.value,
                 )
             )
@@ -312,7 +448,7 @@ async def _analyze_portfolio(
             await session.scalars(
                 select(HarvestingCandidate).where(
                     HarvestingCandidate.analysis_run_id == run_id,
-                    HarvestingCandidate.portfolio_id == portfolio.id,
+                    HarvestingCandidate.portfolio_id == portfolio_id,
                     HarvestingCandidate.status == CandidateStatus.APPROVED.value,
                 )
             )
@@ -328,10 +464,11 @@ async def _analyze_portfolio(
             ).first()
             lot = await session.get(TaxLot, candidate.tax_lot_id)
             asset = await session.get(Asset, candidate.asset_id)
-            if evaluation is None or lot is None or asset is None or evaluation.quote is None:
+            account = await session.get(PortfolioAccount, candidate.portfolio_id)
+            if evaluation is None or lot is None or asset is None or evaluation.quote is None or account is None:
                 continue
             per_unit_loss = (lot.per_unit_basis or Decimal("0")) - evaluation.quote
-            mirror = await deps.providers.execution.available_quantity(portfolio.alpaca_alias or "", asset.symbol)
+            mirror = await deps.providers.execution.available_quantity(account.alpaca_alias or "", asset.symbol)
             rank_items.append(
                 RankInputs(
                     candidate_id=candidate.id,
@@ -350,15 +487,15 @@ async def _analyze_portfolio(
                     provider=evaluation.quote_provider or "",
                     replacement_canonical_id=evaluation.replacement_canonical_id,
                     basis=evaluation.basis or Decimal("0"),
-                    portfolio_id=portfolio.id,
+                    portfolio_id=portfolio_id,
                     asset_id=asset.id,
                     canonical_id=asset.canonical_id,
                     asset_type=asset.asset_type,
                     acquisition_display=lot.acquisition_date,
                 )
             )
-        target = await harvesting_target(session, portfolio.id)
-        selected = select_against_target(rank_items, target, settings.harvest_allow_exceed_target)
+        target = await harvesting_target(session, portfolio_id)
+        selected = select_against_target(rank_items, target, deps.settings.harvest_allow_exceed_target)
         for item, qty, usable, before, after, rank, explanation in selected:
             evaluation = (
                 await session.scalars(
@@ -378,7 +515,7 @@ async def _analyze_portfolio(
         lock_row = await session.scalar(
             select(PortfolioAnalysisLock).where(
                 PortfolioAnalysisLock.analysis_run_id == run_id,
-                PortfolioAnalysisLock.portfolio_id == portfolio.id,
+                PortfolioAnalysisLock.portfolio_id == portfolio_id,
                 PortfolioAnalysisLock.status == "ACTIVE",
             )
         )
@@ -401,18 +538,9 @@ async def evaluate_candidate(candidate_id: UUID, *, deps: AnalysisDependencies, 
         candidate = await session.get(HarvestingCandidate, candidate_id)
         if candidate is None:
             raise KeyError(candidate_id)
-        lots = list(await session.scalars(select(TaxLot).where(TaxLot.portfolio_id == candidate.portfolio_id)))
-        holdings = list(await session.scalars(select(Holding).where(Holding.portfolio_id == candidate.portfolio_id)))
-        asset_values: dict[str, Decimal] = {}
-        class_of: dict[str, str] = {}
-        for holding in holdings:
-            asset = await session.get(Asset, holding.asset_id)
-            if asset is None:
-                continue
-            quote = await deps.providers.quote_for_asset_type(asset.asset_type, asset.canonical_id, asset.symbol, as_of)
-            value = (quote.price * holding.quantity) if quote else Decimal("0")
-            asset_values[asset.canonical_id] = asset_values.get(asset.canonical_id, Decimal("0")) + value
-            class_of[asset.canonical_id] = "BOND" if asset.symbol in {"BND", "AGG", "TLT"} else asset.asset_type
+        asset_values, class_of = await _holding_valuations(
+            session, deps.providers, candidate.portfolio_id, as_of
+        )
         evaluation = await harvesting.evaluate_candidate(session, candidate_id, as_of, now, asset_values, class_of)
         await session.commit()
         return evaluation

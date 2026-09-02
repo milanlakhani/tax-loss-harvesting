@@ -5,13 +5,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
+from app.agents.specialists import complete_analysis_via_agents
 from app.api.deps import get_container, require_demo_session
 from app.container import AppContainer
-from app.demo_data.constants import resolve_runtime_as_of
 from app.domain.enums import AnalysisTrigger
 from app.domain.errors import ActiveAnalysisExistsError, IdempotencyConflictError
 from app.persistence.models import DemoSession
-from app.services.analysis import run_analysis
 from app.services.queries import QueryService
 
 router = APIRouter(prefix="/api")
@@ -31,25 +30,23 @@ async def start_analysis(
 ) -> dict:
     key = x_idempotency_key or body.idempotency_key
     try:
-        async with container.session_factory() as session:
-            as_of = await resolve_runtime_as_of(session, container.settings)
-        result = await run_analysis(
-            demo.user_id,
-            trigger=body.trigger if body.trigger is not AnalysisTrigger.SCHEDULED else AnalysisTrigger.API,
-            as_of=as_of,
+        result = await complete_analysis_via_agents(
+            container,
+            user_id=demo.user_id,
             idempotency_key=key,
-            deps=container.analysis_deps(),
+            trigger=body.trigger if body.trigger is not AnalysisTrigger.SCHEDULED else AnalysisTrigger.API,
         )
     except (IdempotencyConflictError, ActiveAnalysisExistsError) as exc:
         raise HTTPException(status_code=409, detail=exc.message) from exc
     return {
-        "analysis_run_id": str(result.analysis_run_id),
-        "user_id": str(result.user_id),
-        "status": result.status.value,
-        "failure_reason": result.failure_reason,
-        "reused": result.reused,
-        "ml_status": result.ml_status.value if result.ml_status else None,
-        "approved_candidate_ids": [str(i) for i in result.approved_candidate_ids],
+        "analysis_run_id": result["analysis_run_id"],
+        "user_id": result["user_id"],
+        "status": result["status"],
+        "failure_reason": result.get("failure_reason"),
+        "reused": result["reused"],
+        "ml_status": result.get("ml_status"),
+        "approved_candidate_ids": result.get("approved_candidate_ids") or [],
+        "agents_invoked": result.get("agents_invoked") or [],
     }
 
 

@@ -160,6 +160,12 @@ class RemoteMcpHandlers:
     async def evaluate_candidate_tool(self, candidate_id: str) -> dict:
         return await self._gateway.call_tool("evaluate_candidate", {"candidate_id": candidate_id})
 
+    async def evaluate_pending_candidates_tool(self, user_id: str, analysis_run_id: str = "") -> dict:
+        return await self._gateway.call_tool(
+            "evaluate_pending_candidates",
+            {"user_id": user_id, "analysis_run_id": analysis_run_id or ""},
+        )
+
     async def get_spending_summary(self, user_id: str) -> dict:
         return await self._gateway.call_tool("get_spending_summary", {"user_id": user_id})
 

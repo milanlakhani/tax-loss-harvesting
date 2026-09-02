@@ -9,7 +9,7 @@ from uuid import UUID
 from app.container import AppContainer
 from app.demo_data.constants import resolve_runtime_as_of
 from app.domain.enums import AnalysisTrigger
-from app.services.analysis import run_analysis, evaluate_candidate
+from app.services.analysis import evaluate_candidate, evaluate_pending_candidates, run_ml_analysis
 from app.services.ingestion import StatementIngestor
 from app.services.queries import QueryService
 from app.services.statistics import StatisticsService
@@ -21,6 +21,7 @@ MCP_TOOL_NAMES = (
     "parse_statement",
     "run_analysis",
     "evaluate_candidate",
+    "evaluate_pending_candidates",
     "get_spending_summary",
     "get_income_summary",
     "get_cashflow_summary",
@@ -44,6 +45,7 @@ MCP_TOOL_PARAMETERS = {
     "parse_statement": ("filename", "data_hex"),
     "run_analysis": ("user_id", "idempotency_key"),
     "evaluate_candidate": ("candidate_id",),
+    "evaluate_pending_candidates": ("user_id", "analysis_run_id"),
     "get_spending_summary": ("user_id",),
     "get_income_summary": ("user_id",),
     "get_cashflow_summary": ("user_id",),
@@ -116,22 +118,15 @@ class McpToolHandlers:
             return await QueryService(session).transactions(UUID(user_id))
 
     async def parse_statement(self, filename: str, data_hex: str) -> dict:
+        from app.agents.specialists import invoke_doc_parsing_agent
+
         data = bytes.fromhex(data_hex)
-        async with self.container.session_factory() as session:
-            result = await self.container.ingestor.ingest(session, data, filename)
-            await session.commit()
-            return {
-                "statement_id": str(result.statement_id),
-                "format": result.format.value,
-                "reused": result.reused,
-                "transaction_count": result.transaction_count,
-                "lot_count": result.lot_count,
-            }
+        return await invoke_doc_parsing_agent(self.container, filename=filename, data=data)
 
     async def run_analysis_tool(self, user_id: str, idempotency_key: str) -> dict:
         async with self.container.session_factory() as session:
             as_of = await resolve_runtime_as_of(session, self.container.settings)
-        result = await run_analysis(
+        result = await run_ml_analysis(
             UUID(user_id),
             trigger=AnalysisTrigger.API,
             as_of=as_of,
@@ -141,8 +136,10 @@ class McpToolHandlers:
         return {
             "analysis_run_id": str(result.analysis_run_id),
             "status": result.status.value,
+            "candidate_ids": [str(i) for i in result.candidate_ids],
             "approved_candidate_ids": [str(i) for i in result.approved_candidate_ids],
             "ml_status": result.ml_status.value if result.ml_status else None,
+            "evaluated": False,
         }
 
     async def evaluate_candidate_tool(self, candidate_id: str) -> dict:
@@ -157,6 +154,29 @@ class McpToolHandlers:
             "status": evaluation.status,
             "rejection_code": evaluation.rejection_code,
             "explanation": evaluation.explanation,
+        }
+
+    async def evaluate_pending_candidates_tool(self, user_id: str, analysis_run_id: str = "") -> dict:
+        run_id = UUID(analysis_run_id) if analysis_run_id else None
+        async with self.container.session_factory() as session:
+            as_of = await resolve_runtime_as_of(session, self.container.settings)
+        try:
+            result = await evaluate_pending_candidates(
+                UUID(user_id),
+                deps=self.container.analysis_deps(),
+                as_of=as_of,
+                analysis_run_id=run_id,
+            )
+        except KeyError:
+            return {"found": False, "approved_candidate_ids": [], "evaluated": False}
+        return {
+            "found": True,
+            "analysis_run_id": str(result.analysis_run_id),
+            "status": result.status.value,
+            "approved_candidate_ids": [str(i) for i in result.approved_candidate_ids],
+            "ml_status": result.ml_status.value if result.ml_status else None,
+            "evaluated": True,
+            "reused": result.reused,
         }
 
     async def get_spending_summary(self, user_id: str) -> dict:

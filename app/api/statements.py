@@ -8,6 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from app.agents.specialists import invoke_doc_parsing_agent
 from app.api.deps import get_container, require_demo_session
 from app.container import AppContainer
 from app.domain.errors import ParseError
@@ -84,17 +85,18 @@ async def upload_statement(
         raise HTTPException(status_code=400, detail="Uploaded file is not a PDF")
 
     try:
-        async with container.session_factory() as session:
-            result = await container.ingestor.ingest(session, data, file.filename or "upload.pdf")
-            await session.commit()
+        result = await invoke_doc_parsing_agent(
+            container, filename=file.filename or "upload.pdf", data=data
+        )
     except ParseError as exc:
         raise HTTPException(status_code=400, detail=exc.message) from exc
     _ = demo
     return {
-        "statement_id": str(result.statement_id),
-        "format": result.format.value,
-        "reused": result.reused,
-        "status": "ingested" if not result.reused else "duplicate",
+        "statement_id": result["statement_id"],
+        "format": result["format"],
+        "reused": result["reused"],
+        "status": result["status"],
+        "agent": result["agent"],
     }
 
 
