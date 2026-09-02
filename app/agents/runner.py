@@ -4,6 +4,7 @@ from uuid import UUID
 
 from app.container import AppContainer
 from app.mcp.tools import McpToolHandlers
+from app.observability import langfuse_trace
 from app.services.orchestrator_sessions import OrchestratorSessionService
 
 
@@ -35,7 +36,15 @@ async def run_orchestrator_turn(
     sdk = sessions.sdk_session(active.id)
     if container.settings.enable_llm_orchestrator and container.settings.openai_api_key:
         try:
-            reply = await _run_llm(handlers, str(user_id), message, sdk, container.settings.openai_model)
+            with langfuse_trace(
+                container.settings,
+                user_id=user_id,
+                session_id=active.id,
+                message=message,
+                model=container.settings.openai_model,
+            ) as trace:
+                reply = await _run_llm(handlers, str(user_id), message, sdk, container.settings.openai_model)
+                trace.set_output(reply)
             return {"session_id": str(active.id), "reply": reply, "authoritative": True, "mode": "llm"}
         except Exception:
             # A model outage must not break access to deterministic application data.

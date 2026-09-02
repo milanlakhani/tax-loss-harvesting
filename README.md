@@ -5,6 +5,31 @@ orchestration, Streamlit, Alpaca paper synchronization, and guarded paper-order 
 
 For the optional read-only WhatsApp demonstration, see [the no-extra-cost setup guide](docs/whatsapp-no-cost-setup.md).
 
+## Optional Langfuse tracing
+
+Langfuse tracing for OpenAI Agents SDK turns is available but disabled by default. It does not
+participate in financial calculations, candidate evaluation, persistence, or paper execution. Set
+the following only when a Langfuse project is available:
+
+```bash
+LANGFUSE_ENABLED=true
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_CAPTURE_CONTENT=false
+```
+
+With the safe default `LANGFUSE_CAPTURE_CONTENT=false`, prompt, response, invocation-parameter and
+tool payloads are redacted; model/timing/token/error structure remains observable. User and session
+identifiers are hashed before export. Missing credentials, SDK errors, or exporter outages never
+block the agent fallback or any financial workflow. Rebuild and restart the backend after changing
+these variables.
+
+Each LLM chat turn creates a root `AGENT` observation named `run-orchestrator-turn`. OpenAI model
+generations and MCP-style function tools are nested beneath it automatically. In Langfuse, filter
+the `local` environment by tags `northstar`, `chat`, and `orchestrator`; use Sessions to inspect a
+multi-turn conversation. Batch analysis jobs do not call an LLM and therefore do not create traces.
+
 Financial logic lives only in application services. Agents, MCP handlers, API routes, Streamlit,
 and provider adapters do not reimplement harvesting, wash-sale, risk, or evaluation rules.
 
@@ -14,7 +39,8 @@ and provider adapters do not reimplement harvesting, wash-sale, risk, or evaluat
 - Docker **29.6.2**
 - Docker Compose **v5.3.1**
 - PostgreSQL **16.6** (Compose image `postgres:16.6-alpine`)
-- fastapi==0.115.8, pydantic==2.11.7, httpx==0.28.1, openai-agents==0.2.11, fastmcp==2.11.3, streamlit==1.42.2, alpaca-py==0.40.1
+- fastapi==0.115.8, pydantic==2.12.5, httpx==0.28.1, openai-agents==0.22.0, fastmcp==2.11.3, streamlit==1.42.2, alpaca-py==0.40.1
+- langfuse==4.15.1, openinference-instrumentation-openai-agents==2.0.0
 
 ## Startup
 

@@ -4,7 +4,7 @@ uvicorn[standard]==0.34.0
 sqlalchemy==2.0.38
 alembic==1.14.1
 psycopg[binary]==3.2.4
-pydantic==2.11.7
+pydantic==2.12.5
 pydantic-settings==2.7.1
 scikit-learn==1.6.1
 numpy==2.2.2
@@ -14,7 +14,7 @@ httpx==0.28.1
 pytest==8.3.4
 pytest-asyncio==0.25.3
 greenlet==3.1.1
-openai-agents==0.2.11
+openai-agents==0.22.0
 fastmcp==2.11.3
 streamlit==1.42.2
 alpaca-py==0.40.1
@@ -22,3 +22,5 @@ boto3==1.36.16
 respx==0.22.0
 python-multipart==0.0.20
 qrcode[pil]==8.2
+langfuse==4.15.1
+openinference-instrumentation-openai-agents==2.0.0

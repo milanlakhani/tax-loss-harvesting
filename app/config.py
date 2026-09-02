@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"
     enable_llm_orchestrator: bool = True
+    langfuse_enabled: bool = False
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_base_url: str = "https://cloud.langfuse.com"
+    langfuse_capture_content: bool = False
     alpha_vantage_api_key: str | None = None
     coingecko_api_key: str | None = None
     coingecko_api_plan: str = "demo"

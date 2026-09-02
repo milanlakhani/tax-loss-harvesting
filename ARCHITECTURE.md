@@ -16,6 +16,10 @@
 - **agents** — Orchestrator, Document Parsing, ML Analysis, and Eval agents call MCP tools.
   The Eval agent cannot substitute LLM opinion for a rule. The Orchestrator only reports persisted
   candidate statuses.
+- **observability** — optional Langfuse/OpenInference tracing around OpenAI Agents SDK turns.
+  Disabled by default, content-redacted by default, and isolated from financial and execution
+  behavior. Each chat turn is a root `AGENT` observation with nested generation and tool
+  observations; correlation identifiers are hashed before export.
 - **api** — FastAPI health, statements, analyses, paper-order prepare/confirm/refresh, demo sessions,
   orchestrator sessions. Browser and agents submit only server-issued IDs and the confirmation token.
 - **ui** — Streamlit (separate Compose container). Confirmation requires an unchecked review box and
