@@ -34,6 +34,64 @@ def catalog(symbol: str) -> tuple[str, str, AssetType, str, Decimal]:
     return canonical, sym, AssetType(typ), name, price
 
 
+# Current-demo lots must be losses versus live 2026 prices (VTI ~375, QQQ ~708,
+# SPY ~762, VXUS ~87, AAPL ~326, MSFT ~496). Historical 2024 fixtures keep the
+# catalog-relative bases used by regression tests.
+CURRENT_DEMO_UNIT_BASIS: dict[str, Decimal] = {
+    "A-VTI-APPROVED": Decimal("450.00"),
+    "A-QQQ-APPROVED": Decimal("850.00"),
+    "A-VXUS-APPROVED": Decimal("110.00"),
+    "A-BTC-APPROVED": Decimal("120000.00"),
+    "A-ETH-APPROVED": Decimal("5500.00"),
+    "A-SPY-WASH": Decimal("920.00"),
+    "A-SPY-WASH2": Decimal("920.00"),
+    "A-DOGE-REBUY": Decimal("0.50"),
+    "A-BND-RISK": Decimal("95.00"),
+    "A-AAPL-RISK": Decimal("420.00"),
+    "A-MSFT-THRESH": Decimal("520.00"),
+    "A-ETH-THRESH": Decimal("3650.00"),
+    "A-MSFT-IDENTICAL": Decimal("620.00"),
+    "A-SOL-UNKNOWN": Decimal("250.00"),
+    "A-QQQ-EXTRA": Decimal("850.00"),
+    "A-VTI-EXTRA": Decimal("450.00"),
+    "A-BTC-EXTRA": Decimal("120000.00"),
+    "A-AAPL-EXTRA": Decimal("420.00"),
+    "A-VXUS-EXTRA": Decimal("110.00"),
+    "A-AGG-STALE": Decimal("130.00"),
+    "A-SCHB-MIRROR": Decimal("90.00"),
+    "B-QQQ-APPROVED": Decimal("850.00"),
+    "B-SCHD-APPROVED": Decimal("140.00"),
+    "B-VTI-APPROVED": Decimal("450.00"),
+    "B-BTC-APPROVED": Decimal("120000.00"),
+    "B-ETH-APPROVED": Decimal("5500.00"),
+    "B-VNQ-WASH": Decimal("140.00"),
+    "B-VNQ-WASH2": Decimal("140.00"),
+    "B-DOGE-REBUY": Decimal("0.50"),
+    "B-BND-RISK": Decimal("95.00"),
+    "B-TSLA-RISK": Decimal("420.00"),
+    "B-IWM-THRESH": Decimal("230.00"),
+    "B-ETH-THRESH": Decimal("3650.00"),
+    "B-TSLA-PROHIBITED": Decimal("420.00"),
+    "B-SOL-UNKNOWN": Decimal("250.00"),
+    "B-SCHD-PROFIT": Decimal("64.00"),
+    "B-VNQ-PROFIT": Decimal("70.00"),
+    "B-SCHA-MIRROR": Decimal("80.00"),
+    "B-NVDA-STALE": Decimal("220.00"),
+    "B-QQQ-EXTRA": Decimal("850.00"),
+    "B-VTI-EXTRA": Decimal("450.00"),
+    "B-BTC-EXTRA": Decimal("120000.00"),
+    "B-NVDA-EXTRA": Decimal("220.00"),
+    "B-VTI-EXTRA2": Decimal("450.00"),
+}
+
+
+def _with_current_demo_basis(lot: LotSpec) -> LotSpec:
+    unit = CURRENT_DEMO_UNIT_BASIS.get(lot.lot_id)
+    if unit is None or lot.missing_basis or lot.per_unit_basis is None:
+        return lot
+    return replace(lot, per_unit_basis=unit, remaining_basis=unit * lot.remaining_quantity)
+
+
 def _lot(
     lot_id: str,
     symbol: str,
@@ -231,7 +289,10 @@ def _current_demo_spec(
     as_of: date,
     wash_symbol: str,
 ) -> BrokerageStatementSpec:
-    lots = [replace(lot, acquisition_date=shift_from_historical(lot.acquisition_date, as_of)) for lot in lots]
+    lots = [
+        _with_current_demo_basis(replace(lot, acquisition_date=shift_from_historical(lot.acquisition_date, as_of)))
+        for lot in lots
+    ]
     sales = [
         replace(
             sale,

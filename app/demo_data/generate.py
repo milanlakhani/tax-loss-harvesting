@@ -186,7 +186,7 @@ async def seed_risk_and_targets(session) -> None:
             "conservative",
             Decimal("0.14000000"),
             Decimal("0.45000000"),
-            Decimal("0.60000000"),
+            Decimal("0.80000000"),
             Decimal("0.22000000"),
             Decimal("0.18000000"),
             Decimal("50000.00"),
@@ -234,6 +234,14 @@ async def seed_risk_and_targets(session) -> None:
                     rule_version="risk_v1",
                 )
             )
+        else:
+            existing.max_crypto_weight = max_c
+            existing.max_single_asset_weight = max_s
+            existing.max_equity_weight = max_e
+            existing.min_bond_weight = min_b
+            existing.max_volatility = max_v
+            existing.max_trade_notional = max_t
+            existing.max_turnover = max_to
         for asset_class, weight in allocs:
             exists = await session.scalar(
                 select(TargetAllocation).where(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from decimal import Decimal
 
 import pytest
 
@@ -39,6 +40,8 @@ def test_historical_2024_fixtures_are_unchanged():
     assert parsed.period_end.date() == date(2024, 6, 15)
     spy_div = next(d for d in parsed.dividends if d.symbol == "SPY")
     assert spy_div.event_date.date() == date(2024, 6, 5)
+    vti = next(lot for lot in parsed.lots if lot.lot_id == "A-VTI-APPROVED")
+    assert vti.per_unit_basis == Decimal("250.00")
 
 
 @pytest.mark.parser
@@ -88,6 +91,11 @@ def test_current_demo_brokerage_offsets_reinvest_and_realized():
         assert scheduled
         assert all(p.event_date.date() == crypto_day for p in scheduled)
         assert all(as_of - timedelta(days=30) <= p.event_date.date() <= as_of + timedelta(days=30) for p in wash_buys + scheduled)
+        if wash_symbol == "SPY":
+            vti = next(lot for lot in spec.lots if lot.lot_id == "A-VTI-APPROVED")
+            assert vti.per_unit_basis == Decimal("450.00")
+            spy_profit = next(lot for lot in spec.lots if lot.lot_id == "A-SPY-PROFIT")
+            assert spy_profit.per_unit_basis == Decimal("420.00")
 
 
 @pytest.mark.parser
