@@ -1,0 +1,6 @@
+.venv/
+cdk.out/
+cdk.context.json
+app-secret.json
+__pycache__/
+.pytest_cache/

@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.adapters.rolling_window import RollingWindowStore
+from app.adapters.s3_storage import S3StatementStorage
+from app.adapters.storage import LocalStatementStorage, StatementStorage
+from app.config import Settings, get_settings, override_settings
+from app.demo_data.constants import resolve_analysis_as_of
+from app.persistence.database import get_session_factory
+from app.providers.fakes import RecordingClock
+from app.providers.live import build_providers, build_window_store
+from app.providers.protocols import ProviderRouter
+from app.services.analysis import AnalysisDependencies
+from app.services.ingestion import StatementIngestor
+from app.services.paper_execution import PaperExecutionService
+from app.adapters.secrets import apply_runtime_secrets
+
+
+@dataclass
+class AppContainer:
+    settings: Settings
+    session_factory: async_sessionmaker[AsyncSession]
+    providers: ProviderRouter
+    storage: StatementStorage
+    windows: RollingWindowStore
+    clock: RecordingClock
+    ingestor: StatementIngestor
+    mcp_gateway: Any | None = field(default=None)
+
+    def analysis_deps(self) -> AnalysisDependencies:
+        return AnalysisDependencies(
+            settings=self.settings,
+            session_factory=self.session_factory,
+            providers=self.providers,
+            windows=self.windows,
+            clock=self.clock,
+        )
+
+    def paper_execution(self) -> PaperExecutionService:
+        return PaperExecutionService(self.settings, self.session_factory, self.providers, self.clock)
+
+    def remote_mcp_handlers(self):
+        from app.agents.mcp_client import McpGateway, RemoteMcpHandlers
+
+        gateway = self.mcp_gateway if self.mcp_gateway is not None else McpGateway(self.settings.mcp_server_url)
+        return RemoteMcpHandlers(gateway)
+
+
+def _build_storage(settings: Settings) -> StatementStorage:
+    if settings.is_aws:
+        return S3StatementStorage(settings.statements_bucket or "")
+    return LocalStatementStorage(Path(settings.local_data_dir))
+
+
+def build_container(settings: Settings | None = None) -> AppContainer:
+    if settings is None:
+        current = get_settings()
+        apply_runtime_secrets(current)
+        if current.is_aws and current.app_secret_arn:
+            settings = override_settings(Settings())
+        else:
+            settings = current
+    factory = get_session_factory(settings)
+    as_of = resolve_analysis_as_of(settings)
+    windows = build_window_store(settings, factory)
+    providers = build_providers(settings, as_of, windows=windows)
+    storage = _build_storage(settings)
+    clock = RecordingClock(as_of)
+    return AppContainer(
+        settings=settings,
+        session_factory=factory,
+        providers=providers,
+        storage=storage,
+        windows=windows,
+        clock=clock,
+        ingestor=StatementIngestor(storage, providers.fx),
+    )

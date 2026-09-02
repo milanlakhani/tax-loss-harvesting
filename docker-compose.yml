@@ -1,0 +1,117 @@
+services:
+  postgres:
+    image: postgres:16.6-alpine
+    environment:
+      POSTGRES_USER: finance
+      POSTGRES_PASSWORD: finance
+      POSTGRES_DB: finance
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/10-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finance -d finance"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mcp:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgresql+psycopg://finance:finance@postgres:5432/finance
+      TEST_DATABASE_URL: postgresql+psycopg://finance:finance@postgres:5432/finance_test
+      LOCAL_DATA_DIR: /app/local-data
+      ENABLE_LLM_ORCHESTRATOR: "false"
+      ENABLE_PAPER_ORDERS: "false"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./local-data:/app/local-data
+    expose:
+      - "8001"
+    command: >
+      uvicorn app.mcp.asgi:app --host 0.0.0.0 --port 8001
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health')",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  backend:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mcp:
+        condition: service_healthy
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgresql+psycopg://finance:finance@postgres:5432/finance
+      TEST_DATABASE_URL: postgresql+psycopg://finance:finance@postgres:5432/finance_test
+      LOCAL_DATA_DIR: /app/local-data
+      MCP_SERVER_URL: http://mcp:8001/mcp
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./local-data:/app/local-data
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  ui:
+    build: .
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      BACKEND_URL: http://backend:8000
+      PYTHONPATH: /app
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "8501:8501"
+    command: >
+      streamlit run app/ui/streamlit_app.py
+      --server.address 0.0.0.0
+      --server.port 8501
+      --server.headless true
+
+  whatsapp-tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["whatsapp"]
+    depends_on:
+      backend:
+        condition: service_healthy
+    command: tunnel --no-autoupdate --url http://backend:8000
+    restart: unless-stopped
+
+volumes:
+  pgdata:
