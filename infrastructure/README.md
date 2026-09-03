@@ -120,8 +120,9 @@ IPv4 charges.
 
 ## Demo destroy vs production-named environments
 
-`environment=demo` (default) uses destroy-compatible removal policies and empties the generated S3
-bucket on `cdk destroy`. **Data will be deleted.**
+`environment=demo` (default) uses destroy-compatible removal policies. The statement bucket is
+`RemovalPolicy.DESTROY` but is **not** emptied automatically. Empty the exact `StatementBucketName`
+output before `cdk destroy`, or CloudFormation cannot delete the bucket. **Data will be deleted.**
 
 `environment=production` (also `prod`, `staging`) retains RDS, S3, and DynamoDB. That is not a
 silent destroy.
@@ -324,8 +325,28 @@ Use the log group names from the deployed stack (CloudFormation resources `Backe
 
 ### 11. Destroy (demo only — deletes data)
 
-Requires AWS credentials. Warns via the `DestroyWarning` output that RDS, S3 objects, and DynamoDB
-items are deleted for `environment=demo`.
+Requires AWS credentials. Warns via the `DestroyWarning` output that RDS and DynamoDB are deleted
+for `environment=demo`. The statement bucket is not auto-emptied.
+
+Copy `StatementBucketName` from the stack outputs. Refuse to run recursive delete if that name is
+blank:
+
+```bash
+if [ -z "${StatementBucketName}" ]; then
+  echo "StatementBucketName is blank; refusing recursive s3 rm." >&2
+  exit 1
+fi
+aws s3 rm "s3://$StatementBucketName" --recursive --region $Region
+```
+
+```powershell
+if ([string]::IsNullOrWhiteSpace($StatementBucketName)) {
+  throw "StatementBucketName is blank; refusing recursive s3 rm."
+}
+aws s3 rm "s3://$StatementBucketName" --recursive --region $Region
+```
+
+Then destroy:
 
 ```bash
 cdk destroy TaxLossHarvestingDemo -c allowed_ipv4_cidr=203.0.113.10/32 -c environment=demo -c service_desired_count=0

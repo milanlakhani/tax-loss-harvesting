@@ -270,6 +270,19 @@ def test_demo_removal_destroys_and_production_retains():
     prod.has_resource("AWS::RDS::DBInstance", {"DeletionPolicy": "Retain"})
 
 
+def test_statement_bucket_has_no_s3_auto_delete_custom_resource():
+    demo = _template(environment_name="demo")
+    prod = _template(environment_name="production")
+    for template in (demo, prod):
+        blob = str(template.to_json())
+        assert "S3AutoDeleteObjects" not in blob
+        assert "Custom::S3AutoDeleteObjects" not in blob
+        template.resource_count_is("AWS::Lambda::Function", 0)
+        template.has_output("StatementBucketName", Match.any_value())
+    demo.has_resource("AWS::S3::Bucket", {"DeletionPolicy": "Delete"})
+    prod.has_resource("AWS::S3::Bucket", {"DeletionPolicy": "Retain"})
+
+
 def test_vpc_has_gateway_endpoints_and_log_retention():
     template = _template()
     template.resource_count_is("AWS::EC2::VPCEndpoint", 2)

@@ -191,7 +191,6 @@ class TaxLossHarvestingStack(Stack):
             versioned=False,
             public_read_access=False,
             removal_policy=removal,
-            auto_delete_objects=demo_destroy,
         )
 
         windows = dynamodb.Table(
@@ -616,7 +615,8 @@ class TaxLossHarvestingStack(Stack):
             self,
             "DestroyWarning",
             value=(
-                "Demo destroy deletes RDS data, empties the S3 bucket, and removes the DynamoDB table. "
+                "Demo destroy deletes RDS data and the DynamoDB table. Empty StatementBucketName "
+                "before cdk destroy; a non-empty bucket will fail deletion. "
                 "RDS, ALB, ECS, Secrets Manager, CloudWatch Logs, and DynamoDB incur charges while deployed. "
                 if demo_destroy
                 else "This environment name is not destroy-compatible; removal policies retain data."
