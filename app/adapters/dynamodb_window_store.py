@@ -1,12 +1,35 @@
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from app.adapters.rolling_window import WindowMeta, WindowRecord, window_meta_key
 
 SCHEMA_VERSION = "window_v1"
 DEFAULT_TTL_DAYS = 180
+
+
+def _to_dynamodb_compatible(value: Any) -> Any:
+    """Convert finite floats to Decimal before boto3 put_item. Leave other scalars unchanged."""
+    if value is None or isinstance(value, (str, Decimal)):
+        return value
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("DynamoDB cannot store NaN or infinite float values")
+        return Decimal(str(value))
+    if isinstance(value, dict):
+        return {key: _to_dynamodb_compatible(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_to_dynamodb_compatible(item) for item in value]
+    if isinstance(value, tuple):
+        return [_to_dynamodb_compatible(item) for item in value]
+    return value
 
 
 class DynamoDBRollingWindowStore:
@@ -128,6 +151,7 @@ class DynamoDBRollingWindowStore:
         return self.table.get((pk, sk))
 
     async def _put(self, item: dict) -> None:
+        item = _to_dynamodb_compatible(item)
         if hasattr(self.table, "put_item") and not isinstance(self.table, dict):
             # Deterministic identity is (pk, sk). Overwrite is idempotent.
             self.table.put_item(Item=item)
