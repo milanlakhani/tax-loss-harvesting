@@ -165,7 +165,15 @@ class HarvestingService:
         now: datetime,
         asset_values: dict[str, Decimal],
         class_of: dict[str, str],
+        *,
+        execution_at: datetime | None = None,
     ) -> Evaluation:
+        """Evaluate hard gates.
+
+        `as_of` is the wash-sale and statement-history decision timestamp.
+        Quotes, quote freshness, P&L and risk use `execution_at` when provided,
+        otherwise `as_of` (the analysis path). `now` is the evaluation record time.
+        """
         candidate = await session.get(HarvestingCandidate, candidate_id)
         if candidate is None:
             raise StateError(f"Unknown candidate {candidate_id}")
@@ -173,7 +181,8 @@ class HarvestingService:
         asset = await session.get(Asset, candidate.asset_id)
         account = await session.get(PortfolioAccount, candidate.portfolio_id)
         assert lot and asset and account
-        quote = await self.providers.quote_for_asset_type(asset.asset_type, asset.canonical_id, asset.symbol, as_of)
+        quote_at = execution_at if execution_at is not None else as_of
+        quote = await self.providers.quote_for_asset_type(asset.asset_type, asset.canonical_id, asset.symbol, quote_at)
         tradable = False
         mirror_qty = Decimal("0")
         alpaca_positions = []
@@ -226,7 +235,9 @@ class HarvestingService:
             statement_qty_by_symbol=statement_quantities_by_symbol(lot_symbols),
             quote_context=None,
         )
-        code, explanation, status = await self._apply_gates(session, ctx, as_of, asset_values, class_of)
+        code, explanation, status = await self._apply_gates(
+            session, ctx, as_of, quote_at, asset_values, class_of
+        )
         transition(candidate.status, status)
         extra = quote.provenance() if quote else None
         if extra is not None and ctx.quote_context:
@@ -283,13 +294,27 @@ class HarvestingService:
         self,
         session: AsyncSession,
         candidate_id: UUID,
-        as_of: datetime,
-        now: datetime,
+        decision_as_of: datetime,
+        execution_at: datetime,
         asset_values: dict[str, Decimal],
         class_of: dict[str, str],
     ) -> tuple[bool, RejectionCode | None, str, Quote | None]:
-        """Re-run hard gates on an already-evaluated candidate without substituting new policy."""
-        evaluation = await self.evaluate_candidate(session, candidate_id, as_of, now, asset_values, class_of)
+        """Re-run hard gates on an already-evaluated candidate without substituting new policy.
+
+        Wash-sale coverage, statement history and repurchase windows use
+        `decision_as_of` (persisted runtime as-of for synthetic current-demo).
+        Current quotes, valuation, P&L, risk, tradability and Alpaca positions
+        use `execution_at` (clock.now() at prepare/confirm).
+        """
+        evaluation = await self.evaluate_candidate(
+            session,
+            candidate_id,
+            decision_as_of,
+            execution_at,
+            asset_values,
+            class_of,
+            execution_at=execution_at,
+        )
         ok = evaluation.status == CandidateStatus.APPROVED.value
         code = RejectionCode(evaluation.rejection_code) if evaluation.rejection_code else None
         quote = None
@@ -297,14 +322,17 @@ class HarvestingService:
         if candidate:
             asset = await session.get(Asset, candidate.asset_id)
             if asset:
-                quote = await self.providers.quote_for_asset_type(asset.asset_type, asset.canonical_id, asset.symbol, as_of)
+                quote = await self.providers.quote_for_asset_type(
+                    asset.asset_type, asset.canonical_id, asset.symbol, execution_at
+                )
         return ok, code, evaluation.explanation, quote
 
     async def _apply_gates(
         self,
         session: AsyncSession,
         ctx: GateContext,
-        as_of: datetime,
+        decision_as_of: datetime,
+        execution_at: datetime,
         asset_values: dict[str, Decimal],
         class_of: dict[str, str],
     ) -> tuple[RejectionCode | None, str, CandidateStatus]:
@@ -325,7 +353,7 @@ class HarvestingService:
             return RejectionCode.UNAVAILABLE_QUOTE, "No quote from the required provider", CandidateStatus.NOT_EXECUTABLE
         freshness_quote = await assess_quote_freshness(
             quote=ctx.quote,
-            as_of=as_of,
+            as_of=execution_at,
             max_age_minutes=self.settings.quote_max_age_minutes,
             asset_type=asset.asset_type,
             calendar=self.providers.execution,
@@ -345,10 +373,10 @@ class HarvestingService:
                 f"Usable loss {ctx.total_loss} below minimum {self.settings.min_loss_threshold}",
                 CandidateStatus.BELOW_THRESHOLD,
             )
-        freshness = await self._freshness_or_reconciliation(ctx, as_of)
+        freshness = await self._freshness_or_reconciliation(ctx, decision_as_of)
         if freshness:
             return freshness
-        wash = await self._wash_or_crypto_conflict(session, ctx, as_of)
+        wash = await self._wash_or_crypto_conflict(session, ctx, decision_as_of)
         if wash:
             return wash
         risk = await self._risk_violation(session, ctx, asset_values, class_of)

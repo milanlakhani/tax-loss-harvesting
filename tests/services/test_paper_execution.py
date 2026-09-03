@@ -1,18 +1,35 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
 
-from app.demo_data.constants import AS_OF, USER_A_ID
+from app.adapters.postgres_window_store import PostgresRollingWindowStore
+from app.adapters.storage import LocalStatementStorage
+from app.demo_data.bank_generator import build_bank_statements
+from app.demo_data.bank_pdf import render_bank_pdf
+from app.demo_data.brokerage_generator import portfolio_a_spec, portfolio_b_spec
+from app.demo_data.brokerage_pdf import render_brokerage_pdf
+from app.demo_data.constants import AS_OF, DEFAULT_DEMO_AS_OF_DATE, USER_A_ID, as_of_datetime
+from app.demo_data.generate import (
+    build_fake_providers,
+    seed_labels,
+    seed_mirrors,
+    seed_replacements,
+    seed_risk_and_targets,
+    seed_users,
+)
 from app.domain.enums import AnalysisTrigger, CandidateStatus, PaperOrderStatus
 from app.domain.errors import PaperExecutionError
-from app.persistence.models import Asset, ExecutionPreparation, HarvestingCandidate, TaxLot
+from app.persistence.models import Asset, DemoDatasetState, ExecutionPreparation, HarvestingCandidate, TaxLot
 from app.providers.fakes import RecordingClock
 from app.providers.protocols import ExecutionPosition
-from app.services.analysis import run_analysis
+from app.services.analysis import AnalysisDependencies, run_analysis
 from app.services.demo_session import DemoSessionService
+from app.services.freshness import CURRENT_DEMO_DATASET
+from app.services.ingestion import StatementIngestor
 from app.services.paper_execution import PaperExecutionService
 from tests.helpers import analysis_deps, seed_historical_demo
 
@@ -29,15 +46,59 @@ async def _candidate(session, run_id, external_lot_id: str) -> HarvestingCandida
     return candidate
 
 
+def _refresh_quotes(providers, at) -> None:
+    ts = at - timedelta(minutes=5)
+    for quotes in (providers.equity.quotes, providers.crypto.quotes):
+        for quote in quotes.values():
+            quote.source_timestamp = ts
+            quote.retrieved_at = at
+
+
+def _set_quote_price(providers, canonical_id: str, price: Decimal) -> None:
+    quote = providers.equity.quotes.get(canonical_id) or providers.crypto.quotes.get(canonical_id)
+    assert quote is not None
+    quote.price = price
+
+
+async def _seed_current_demo(session, settings):
+    as_of_date = DEFAULT_DEMO_AS_OF_DATE
+    as_of = as_of_datetime(as_of_date)
+    brokerage = (portfolio_a_spec(as_of=as_of_date), portfolio_b_spec(as_of=as_of_date))
+    storage = LocalStatementStorage(settings.local_data_dir)
+    providers = build_fake_providers(as_of, brokerage_specs=brokerage)
+    ingestor = StatementIngestor(storage, providers.fx)
+    await seed_users(session)
+    await seed_replacements(session)
+    await seed_risk_and_targets(session)
+    await seed_mirrors(session, providers)
+    statements, labels = build_bank_statements(as_of=as_of_date, min_history=settings.min_history_threshold)
+    for spec in statements:
+        await ingestor.ingest(
+            session, render_bank_pdf(spec), f"current-demo/{spec.statement_id}.pdf", demo_dataset=CURRENT_DEMO_DATASET
+        )
+    for spec in brokerage:
+        await ingestor.ingest(
+            session,
+            render_brokerage_pdf(spec),
+            f"current-demo/{spec.statement_id}.pdf",
+            demo_dataset=CURRENT_DEMO_DATASET,
+        )
+    await seed_labels(session, labels)
+    session.add(DemoDatasetState(dataset=CURRENT_DEMO_DATASET, as_of_date=as_of_date, is_synthetic=True))
+    await session.commit()
+    return providers, as_of
+
+
 @pytest.mark.integration
 async def test_prepare_confirm_and_guardrails(session, session_factory, settings):
     providers = await seed_historical_demo(session, settings)
     deps = analysis_deps(settings, session_factory, providers)
     result = await run_analysis(USER_A_ID, trigger=AnalysisTrigger.MANUAL, as_of=AS_OF, idempotency_key="paper-1", deps=deps)
     enabled = settings.model_copy(update={"enable_paper_orders": True})
+    disabled = settings.model_copy(update={"enable_paper_orders": False})
     clock = RecordingClock(AS_OF)
     live = PaperExecutionService(enabled, session_factory, providers, clock)
-    blocked = PaperExecutionService(settings, session_factory, providers, clock)
+    blocked = PaperExecutionService(disabled, session_factory, providers, clock)
     demo_token = await DemoSessionService(settings, session_factory).create(USER_A_ID)
 
     async with session_factory() as db:
@@ -186,4 +247,81 @@ async def test_outside_hours_paper_order_is_accepted_as_queued(session, session_
     assert confirmed["queued"] is True
     assert confirmed["provider_status"] == "accepted"
     assert "queued" in (confirmed["queue_reason"] or "").lower()
+
+
+@pytest.mark.integration
+async def test_prepare_splits_decision_as_of_from_execution_clock(session, session_factory, settings):
+    providers = await seed_historical_demo(session, settings)
+    deps = analysis_deps(settings, session_factory, providers)
+    result = await run_analysis(
+        USER_A_ID, trigger=AnalysisTrigger.MANUAL, as_of=AS_OF, idempotency_key="paper-split-clock", deps=deps
+    )
+    enabled = settings.model_copy(update={"enable_paper_orders": True})
+    execution_at = AS_OF + timedelta(days=1)
+    live = PaperExecutionService(enabled, session_factory, providers, RecordingClock(execution_at))
+    demo_token = await DemoSessionService(settings, session_factory).create(USER_A_ID)
+    async with session_factory() as db:
+        equity = await _candidate(db, result.analysis_run_id, "A-VTI-APPROVED")
+        qqq = await _candidate(db, result.analysis_run_id, "A-QQQ-APPROVED")
+        vxus = await _candidate(db, result.analysis_run_id, "A-VXUS-APPROVED")
+
+    providers.equity.calls.clear()
+    providers.crypto.calls.clear()
+    with pytest.raises(PaperExecutionError) as stale:
+        await live.prepare(candidate_id=equity.id, demo_session_token=demo_token)
+    assert stale.value.code == "STALE_QUOTE"
+
+    _refresh_quotes(providers, execution_at)
+    providers.equity.calls.clear()
+    prepared = await live.prepare(candidate_id=equity.id, demo_session_token=demo_token)
+    assert prepared["side"] == "SELL"
+    assert prepared["symbol"] == "VTI"
+    assert any(call[0] == "quote" and call[1] == "ETF:VTI" and call[2] == execution_at for call in providers.equity.calls)
+    assert not any(call[0] == "quote" and len(call) > 2 and call[2] == AS_OF for call in providers.equity.calls)
+
+    _set_quote_price(providers, "ETF:QQQ", Decimal("600.00"))
+    _refresh_quotes(providers, execution_at)
+    with pytest.raises(PaperExecutionError) as profitable:
+        await live.prepare(candidate_id=qqq.id, demo_session_token=demo_token)
+    assert profitable.value.code == "PROFITABLE_LOT"
+
+    _set_quote_price(providers, "ETF:QQQ", Decimal("400.00"))
+    _set_quote_price(providers, "CRYPTO:BTC-USD", Decimal("5000000.00"))
+    _refresh_quotes(providers, execution_at)
+    with pytest.raises(PaperExecutionError) as risk:
+        await live.prepare(candidate_id=vxus.id, demo_session_token=demo_token)
+    assert risk.value.code == "RISK_PROFILE_VIOLATION"
+
+    _set_quote_price(providers, "CRYPTO:BTC-USD", Decimal("60000.00"))
+    _set_quote_price(providers, "ETF:VTI", Decimal("300.00"))
+    _refresh_quotes(providers, execution_at)
+    with pytest.raises(PaperExecutionError) as confirm_profit:
+        await live.confirm(candidate_id=equity.id, token=prepared["token"], demo_session_token=demo_token)
+    assert confirm_profit.value.code == "PROFITABLE_LOT"
+
+
+@pytest.mark.integration
+async def test_current_demo_prepare_uses_persisted_as_of_for_wash_history(session, session_factory, settings):
+    current = settings.model_copy(update={"demo_mode": "current", "demo_as_of_date": "2026-08-28", "enable_paper_orders": True})
+    providers, as_of = await _seed_current_demo(session, current)
+    deps = AnalysisDependencies(
+        settings=current,
+        session_factory=session_factory,
+        providers=providers,
+        windows=PostgresRollingWindowStore(session_factory),
+        clock=RecordingClock(as_of),
+    )
+    result = await run_analysis(
+        USER_A_ID, trigger=AnalysisTrigger.MANUAL, as_of=as_of, idempotency_key="paper-current-next-day", deps=deps
+    )
+    execution_at = as_of + timedelta(days=1)
+    live = PaperExecutionService(current, session_factory, providers, RecordingClock(execution_at))
+    demo_token = await DemoSessionService(current, session_factory).create(USER_A_ID)
+    async with session_factory() as db:
+        equity = await _candidate(db, result.analysis_run_id, "A-VTI-APPROVED")
+        assert equity.status == CandidateStatus.APPROVED.value
+    _refresh_quotes(providers, execution_at)
+    prepared = await live.prepare(candidate_id=equity.id, demo_session_token=demo_token)
+    assert prepared["symbol"] == "VTI"
+    assert prepared["side"] == "SELL"
 

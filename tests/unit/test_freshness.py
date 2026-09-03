@@ -145,6 +145,23 @@ def test_demo_allowance_does_not_change_wash_or_incomplete_history_rules():
     assert wash_sale_coverage_complete(date(2026, 3, 15), date(2026, 8, 18), as_of, 30) is False
 
 
+def test_wash_coverage_requires_statement_end_on_or_after_as_of_date():
+    start = date(2026, 3, 15)
+    period_end = date(2026, 9, 2)
+    assert wash_sale_coverage_complete(start, period_end, datetime(2026, 9, 2, 15, 0), 30) is True
+    assert wash_sale_coverage_complete(start, period_end, datetime(2026, 9, 3, 2, 23), 30) is False
+
+
+def test_current_demo_wash_history_uses_decision_as_of_not_execution_clock():
+    """Statement coverage is judged at the persisted seed date, not wall-clock execution."""
+    start = date(2026, 3, 15)
+    period_end = date(2026, 9, 2)
+    decision_as_of = datetime(2026, 9, 2, 15, 0)
+    execution_at = datetime(2026, 9, 3, 2, 23)
+    assert wash_sale_coverage_complete(start, period_end, decision_as_of, 30) is True
+    assert wash_sale_coverage_complete(start, period_end, execution_at, 30) is False
+
+
 def test_filename_user_or_env_do_not_grant_demo_allowance():
     as_of = datetime(2026, 9, 1, 15, 0)
     env = Settings(app_env="aws", demo_mode="current")

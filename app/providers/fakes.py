@@ -38,7 +38,7 @@ class FakeEquityQuoteProvider:
         self.history[canonical_id] = sorted(observations, key=lambda o: o.observed_at)
 
     async def get_quote(self, canonical_id: str, symbol: str, as_of: datetime) -> Quote | None:
-        self.calls.append(("quote", canonical_id))
+        self.calls.append(("quote", canonical_id, as_of))
         return self.quotes.get(canonical_id)
 
     async def get_price_history(
@@ -68,7 +68,7 @@ class FakeCryptoQuoteProvider:
         self.history[canonical_id] = sorted(observations, key=lambda o: o.observed_at)
 
     async def get_quote(self, canonical_id: str, symbol: str, as_of: datetime) -> Quote | None:
-        self.calls.append(("quote", canonical_id))
+        self.calls.append(("quote", canonical_id, as_of))
         return self.quotes.get(canonical_id)
 
     async def get_price_history(

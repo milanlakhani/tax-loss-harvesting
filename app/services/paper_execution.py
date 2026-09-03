@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
+from app.demo_data.constants import resolve_runtime_as_of
 from app.domain.enums import CandidateStatus, ELIGIBLE_HARVEST_ASSET_TYPES, PaperOrderStatus, PreparationStatus, RejectionCode
 from app.domain.errors import PaperExecutionError
 from app.persistence.models import (
@@ -87,13 +88,18 @@ class PaperExecutionService:
         self.harvesting = HarvestingService(settings, providers, ConflictService(settings))
 
     async def prepare(self, *, candidate_id: UUID, demo_session_token: str) -> dict:
+        """Prepare a paper SELL using live execution checks and persisted history as-of.
+
+        Wash-sale/history uses `resolve_runtime_as_of`. Quotes, valuation, Alpaca
+        position, tradability, freshness and token expiry use `clock.now()`.
+        """
         now = self.clock.now()
-        as_of = now
         async with self.session_factory() as session:
+            decision_as_of = await resolve_runtime_as_of(session, self.settings)
             candidate, lot, asset, account, evaluation = await self._load_approved(session, candidate_id)
             asset_values, class_of = await self._portfolio_values(session, account, now)
             ok, code, explanation, _quote = await self.harvesting.recheck_approved(
-                session, candidate_id, now, now, asset_values, class_of
+                session, candidate_id, decision_as_of, now, asset_values, class_of
             )
             if not ok:
                 raise PaperExecutionError(explanation, code.value if code else "NOT_APPROVED")
@@ -104,7 +110,9 @@ class PaperExecutionService:
                     raise PaperExecutionError("Candidate already reserved or confirmed", "ALREADY_EXECUTED")
                 if existing.status == PreparationStatus.PREPARED.value and existing.expires_at and existing.expires_at > now:
                     raise PaperExecutionError("Active preparation already exists", "ALREADY_PREPARED")
-            snapshot = await self._build_snapshot(session, candidate, lot, asset, account, evaluation, now)
+            snapshot = await self._build_snapshot(
+                session, candidate, lot, asset, account, evaluation, now, prepared_at=now
+            )
             await self._validate_snapshot(snapshot, lot, account, asset, now)
             token = secrets.token_urlsafe(32)
             token_hash = _hash_token(token, self.settings.demo_session_signing_secret)
@@ -171,13 +179,16 @@ class PaperExecutionService:
                 raise PaperExecutionError("Demo session mismatch", "SESSION_MISMATCH")
             if prep.status not in {PreparationStatus.PREPARED.value}:
                 raise PaperExecutionError("Preparation is not confirmable", "INVALID_STATE")
+            decision_as_of = await resolve_runtime_as_of(session, self.settings)
             asset_values, class_of = await self._portfolio_values(session, account, now)
             ok, code, explanation, _quote = await self.harvesting.recheck_approved(
-                session, candidate_id, now, now, asset_values, class_of
+                session, candidate_id, decision_as_of, now, asset_values, class_of
             )
             if not ok:
                 raise PaperExecutionError(explanation, code.value if code else "NOT_APPROVED")
-            live = await self._build_snapshot(session, candidate, lot, asset, account, evaluation, now)
+            live = await self._build_snapshot(
+                session, candidate, lot, asset, account, evaluation, now, prepared_at=now
+            )
             stored = prep.snapshot or {}
             immutable_keys = (
                 "candidate_id",
@@ -303,14 +314,18 @@ class PaperExecutionService:
             raise PaperExecutionError("Incomplete candidate", "INCOMPLETE")
         return candidate, lot, asset, account, evaluation
 
-    async def _build_snapshot(self, session, candidate, lot, asset, account, evaluation, now: datetime) -> dict:
+    async def _build_snapshot(
+        self, session, candidate, lot, asset, account, evaluation, execution_at: datetime, *, prepared_at: datetime | None = None
+    ) -> dict:
         if asset.asset_type not in {t.value for t in ELIGIBLE_HARVEST_ASSET_TYPES}:
             raise PaperExecutionError("Ineligible asset type", "INELIGIBLE_ASSET_TYPE")
         qty = evaluation.selected_quantity or lot.remaining_quantity
-        quote = await self.providers.quote_for_asset_type(asset.asset_type, asset.canonical_id, asset.symbol, now)
+        quote = await self.providers.quote_for_asset_type(
+            asset.asset_type, asset.canonical_id, asset.symbol, execution_at
+        )
         assessment = await assess_quote_freshness(
             quote=quote,
-            as_of=now,
+            as_of=execution_at,
             max_age_minutes=self.settings.quote_max_age_minutes,
             asset_type=asset.asset_type,
             calendar=self.providers.execution,
@@ -348,11 +363,11 @@ class PaperExecutionService:
             "approval_status": candidate.status,
             "rejection_code": evaluation.rejection_code,
             "explanation": evaluation.explanation,
-            "prepared_at": now.isoformat(),
+            "prepared_at": (prepared_at or execution_at).isoformat(),
             "environment": "SIMULATED PAPER TRADE - NO REAL MONEY",
         }
 
-    async def _validate_snapshot(self, snapshot: dict, lot, account, asset, now: datetime) -> None:
+    async def _validate_snapshot(self, snapshot: dict, lot, account, asset, execution_at: datetime) -> None:
         if snapshot["side"] != "SELL":
             raise PaperExecutionError("Only SELL is allowed", "BUY_NOT_ALLOWED")
         if asset.asset_type in {"FX", "CURRENCY", "CASH", "BANK_BALANCE", "UNKNOWN"}:
@@ -375,10 +390,12 @@ class PaperExecutionService:
         )
         if ownership:
             raise PaperExecutionError("Alpaca quantity insufficient", ownership.value)
-        quote = await self.providers.quote_for_asset_type(asset.asset_type, asset.canonical_id, asset.symbol, now)
+        quote = await self.providers.quote_for_asset_type(
+            asset.asset_type, asset.canonical_id, asset.symbol, execution_at
+        )
         assessment = await assess_quote_freshness(
             quote=quote,
-            as_of=now,
+            as_of=execution_at,
             max_age_minutes=self.settings.quote_max_age_minutes,
             asset_type=asset.asset_type,
             calendar=self.providers.execution,
@@ -394,7 +411,7 @@ class PaperExecutionService:
             return None
         return bool(clock.is_open)
 
-    async def _portfolio_values(self, session, account, as_of) -> tuple[dict, dict]:
+    async def _portfolio_values(self, session, account, execution_at) -> tuple[dict, dict]:
         holdings = list(await session.scalars(select(Holding).where(Holding.portfolio_id == account.id)))
         asset_values: dict[str, Decimal] = {}
         class_of: dict[str, str] = {}
@@ -402,7 +419,9 @@ class PaperExecutionService:
             held = await session.get(Asset, holding.asset_id)
             if held is None:
                 continue
-            quote = await self.providers.quote_for_asset_type(held.asset_type, held.canonical_id, held.symbol, as_of)
+            quote = await self.providers.quote_for_asset_type(
+                held.asset_type, held.canonical_id, held.symbol, execution_at
+            )
             value = (quote.price * holding.quantity) if quote else Decimal("0")
             asset_values[held.canonical_id] = asset_values.get(held.canonical_id, Decimal("0")) + value
             class_of[held.canonical_id] = "BOND" if held.symbol in {"BND", "AGG", "TLT"} else held.asset_type
