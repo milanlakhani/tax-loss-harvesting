@@ -163,6 +163,9 @@ def test_secrets_are_json_keys_not_plaintext_values():
     assert "OPENAI_API_KEY" not in secret_names
     assert "ALPACA_ACCOUNT_1_SECRET" not in secret_names
     assert "WHATSAPP_ACCESS_TOKEN" not in blob
+    assert "pk-lf-" not in blob
+    assert "sk-lf-" not in blob
+    assert "cloud.langfuse.com" not in blob
 
 
 def test_dynamodb_keys_ttl_and_on_demand_billing():
@@ -271,6 +274,8 @@ def test_migration_task_uses_alembic_and_backend_secrets():
                 names = {item["Name"] for item in container.get("Secrets", [])}
                 assert "POSTGRES_PASSWORD" in names
                 assert "OPENAI_API_KEY" in names
+                assert "LANGFUSE_SECRET_KEY" not in names
+                assert "LANGFUSE_PUBLIC_KEY" not in names
     assert found
     template.has_output("MigrationTaskDefinitionArn", Match.any_value())
 
@@ -300,10 +305,14 @@ def test_mcp_sidecar_is_task_local_on_port_8001():
     mcp_secrets = {item["Name"] for item in mcp.get("Secrets", [])}
     assert "OPENAI_API_KEY" not in mcp_secrets
     assert "DEMO_SESSION_SIGNING_SECRET" not in mcp_secrets
+    assert "LANGFUSE_PUBLIC_KEY" not in mcp_secrets
+    assert "LANGFUSE_SECRET_KEY" not in mcp_secrets
     assert "ALPACA_ACCOUNT_1_KEY" in mcp_secrets
     assert "POSTGRES_PASSWORD" in mcp_secrets
     streamlit_secrets = {item["Name"] for item in streamlit.get("Secrets", [])}
     assert "ALPACA_ACCOUNT_1_SECRET" not in streamlit_secrets
+    assert "LANGFUSE_PUBLIC_KEY" not in streamlit_secrets
+    assert "LANGFUSE_SECRET_KEY" not in streamlit_secrets
     depends = backend.get("DependsOn") or []
     assert any(
         item.get("ContainerName") == "mcp" and item.get("Condition") == "HEALTHY" for item in depends
@@ -314,4 +323,69 @@ def test_mcp_sidecar_is_task_local_on_port_8001():
     template.resource_count_is("AWS::ElasticLoadBalancingV2::LoadBalancer", 1)
     template.resource_count_is("AWS::EC2::NatGateway", 0)
     template.has_output("McpInternalUrl", {"Value": AWS_MCP_SERVER_URL})
+
+
+def test_langfuse_secrets_are_injected_only_on_backend():
+    from stacks.tlh_stack import LANGFUSE_BACKEND_SECRET_KEYS
+
+    template = _template()
+    demo_task = None
+    migrate = None
+    for resource in template.find_resources("AWS::ECS::TaskDefinition").values():
+        names = {container["Name"] for container in resource["Properties"]["ContainerDefinitions"]}
+        if {"backend", "streamlit", "mcp"} <= names:
+            demo_task = resource
+        for container in resource["Properties"]["ContainerDefinitions"]:
+            if container.get("Command") == ["alembic", "upgrade", "head"]:
+                migrate = container
+    assert demo_task is not None
+    assert migrate is not None
+    containers = {row["Name"]: row for row in demo_task["Properties"]["ContainerDefinitions"]}
+    backend_secrets = {item["Name"] for item in containers["backend"].get("Secrets", [])}
+    mcp_secrets = {item["Name"] for item in containers["mcp"].get("Secrets", [])}
+    streamlit_secrets = {item["Name"] for item in containers["streamlit"].get("Secrets", [])}
+    migrate_secrets = {item["Name"] for item in migrate.get("Secrets", [])}
+    for key in LANGFUSE_BACKEND_SECRET_KEYS:
+        assert key in backend_secrets
+        assert key not in mcp_secrets
+        assert key not in streamlit_secrets
+        assert key not in migrate_secrets
+    backend_env = {item["Name"]: item["Value"] for item in containers["backend"].get("Environment", [])}
+    assert "LANGFUSE_PUBLIC_KEY" not in backend_env
+    assert "LANGFUSE_SECRET_KEY" not in backend_env
+    assert "LANGFUSE_BASE_URL" not in backend_env
+    assert "LANGFUSE_ENABLED" not in backend_env
+    backend_secret_refs = {item["Name"]: item.get("ValueFrom") for item in containers["backend"].get("Secrets", [])}
+    for key in LANGFUSE_BACKEND_SECRET_KEYS:
+        assert backend_secret_refs[key]
+    mcp_env = {item["Name"]: item["Value"] for item in containers["mcp"].get("Environment", [])}
+    streamlit_env = {item["Name"]: item["Value"] for item in containers["streamlit"].get("Environment", [])}
+    assert mcp_env.get("LANGFUSE_ENABLED") == "false"
+    assert streamlit_env.get("LANGFUSE_ENABLED") == "false"
+    assert "LANGFUSE_BASE_URL" not in mcp_env
+    assert "LANGFUSE_BASE_URL" not in streamlit_env
+    outputs = template.to_json().get("Outputs", {})
+    assert "Langfuse" not in str(outputs)
+    blob = str(template.to_json())
+    assert "pk-lf-" not in blob
+    assert "sk-lf-" not in blob
+    assert "cloud.langfuse.com" not in blob
+    assert "cloud.langfuse.eu" not in blob
+    egress_ports = {
+        (rule.get("FromPort"), rule.get("ToPort"))
+        for resource in template.find_resources("AWS::EC2::SecurityGroup").values()
+        for rule in resource["Properties"].get("SecurityGroupEgress", [])
+    }
+    assert (443, 443) in egress_ports
+    ingress_ports = {
+        rule.get("FromPort")
+        for resource in template.find_resources("AWS::EC2::SecurityGroup").values()
+        for rule in resource["Properties"].get("SecurityGroupIngress", [])
+    }
+    assert 443 not in ingress_ports
+    import json
+    from pathlib import Path
+
+    cdk_json = json.loads((Path(__file__).resolve().parents[1] / "cdk.json").read_text(encoding="utf-8"))
+    assert "langfuse" not in json.dumps(cdk_json).lower()
 

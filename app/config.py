@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -47,6 +47,41 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"
     enable_llm_orchestrator: bool = True
+    langfuse_enabled: bool = False
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_base_url: str = "https://cloud.langfuse.com"
+    langfuse_capture_content: bool = False
+    langfuse_tracing_environment: str | None = None
+
+    @field_validator("langfuse_enabled", "langfuse_capture_content", mode="before")
+    @classmethod
+    def _blank_langfuse_bool(cls, value):
+        if value in ("", None):
+            return False
+        return value
+
+    @field_validator("langfuse_public_key", "langfuse_secret_key", mode="before")
+    @classmethod
+    def _blank_langfuse_secret(cls, value):
+        if value == "":
+            return None
+        return value
+
+    @field_validator("langfuse_base_url", mode="before")
+    @classmethod
+    def _blank_langfuse_base_url(cls, value):
+        if not value:
+            return "https://cloud.langfuse.com"
+        return value
+
+    @field_validator("langfuse_tracing_environment", mode="before")
+    @classmethod
+    def _blank_langfuse_tracing_environment(cls, value):
+        if not value:
+            return None
+        return value
+
     alpha_vantage_api_key: str | None = None
     coingecko_api_key: str | None = None
     coingecko_api_plan: str = "demo"

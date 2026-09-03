@@ -36,6 +36,19 @@ APP_SECRET_JSON_KEYS = (
     "ALPACA_ACCOUNT_2_KEY",
     "ALPACA_ACCOUNT_2_SECRET",
     "DEMO_SESSION_SIGNING_SECRET",
+    "LANGFUSE_PUBLIC_KEY",
+    "LANGFUSE_SECRET_KEY",
+    "LANGFUSE_BASE_URL",
+    "LANGFUSE_TRACING_ENVIRONMENT",
+    "LANGFUSE_ENABLED",
+)
+
+LANGFUSE_BACKEND_SECRET_KEYS = (
+    "LANGFUSE_PUBLIC_KEY",
+    "LANGFUSE_SECRET_KEY",
+    "LANGFUSE_BASE_URL",
+    "LANGFUSE_TRACING_ENVIRONMENT",
+    "LANGFUSE_ENABLED",
 )
 
 BACKEND_PORT = 8000
@@ -278,6 +291,7 @@ class TaxLossHarvestingStack(Stack):
             "ALPACA_ACCOUNT_2_NAME": "growth-demo",
             "COINGECKO_API_PLAN": "demo",
             "PYTHONUNBUFFERED": "1",
+            "LANGFUSE_ENABLED": "false",
         }
         backend_secrets = {
             "OPENAI_API_KEY": ecs.Secret.from_secrets_manager(app_secret, "OPENAI_API_KEY"),
@@ -292,6 +306,9 @@ class TaxLossHarvestingStack(Stack):
             ),
             "POSTGRES_USER": ecs.Secret.from_secrets_manager(rds_secret, "username"),
             "POSTGRES_PASSWORD": ecs.Secret.from_secrets_manager(rds_secret, "password"),
+        }
+        langfuse_backend_secrets = {
+            key: ecs.Secret.from_secrets_manager(app_secret, key) for key in LANGFUSE_BACKEND_SECRET_KEYS
         }
         mcp_secrets = {
             "ALPHA_VANTAGE_API_KEY": ecs.Secret.from_secrets_manager(app_secret, "ALPHA_VANTAGE_API_KEY"),
@@ -338,7 +355,7 @@ class TaxLossHarvestingStack(Stack):
             essential=True,
             logging=ecs.LogDrivers.aws_logs(stream_prefix="backend", log_group=backend_logs),
             environment=backend_env,
-            secrets=backend_secrets,
+            secrets={**backend_secrets, **langfuse_backend_secrets},
             command=[
                 "uvicorn",
                 "app.main:app",
@@ -373,6 +390,7 @@ class TaxLossHarvestingStack(Stack):
                 "PYTHONPATH": "/app",
                 "STREAMLIT_SERVER_HEADLESS": "true",
                 "STREAMLIT_BROWSER_GATHER_USAGE_STATS": "false",
+                "LANGFUSE_ENABLED": "false",
             },
             command=[
                 "streamlit",

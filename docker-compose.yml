@@ -28,6 +28,11 @@ services:
       LOCAL_DATA_DIR: /app/local-data
       ENABLE_LLM_ORCHESTRATOR: "false"
       ENABLE_PAPER_ORDERS: "false"
+      LANGFUSE_ENABLED: "false"
+      LANGFUSE_PUBLIC_KEY: ""
+      LANGFUSE_SECRET_KEY: ""
+      LANGFUSE_BASE_URL: ""
+      LANGFUSE_TRACING_ENVIRONMENT: ""
     env_file:
       - path: .env
         required: false
@@ -93,6 +98,11 @@ services:
     environment:
       BACKEND_URL: http://backend:8000
       PYTHONPATH: /app
+      LANGFUSE_ENABLED: "false"
+      LANGFUSE_PUBLIC_KEY: ""
+      LANGFUSE_SECRET_KEY: ""
+      LANGFUSE_BASE_URL: ""
+      LANGFUSE_TRACING_ENVIRONMENT: ""
     env_file:
       - path: .env
         required: false

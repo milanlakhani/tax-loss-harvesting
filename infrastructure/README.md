@@ -79,14 +79,21 @@ Mandatory non-blank JSON keys in the application secret:
 - `ALPACA_ACCOUNT_1_KEY` / `ALPACA_ACCOUNT_1_SECRET`
 - `ALPACA_ACCOUNT_2_KEY` / `ALPACA_ACCOUNT_2_SECRET`
 - `DEMO_SESSION_SIGNING_SECRET`
+- `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` (optional; leave blank to keep tracing disabled)
+- `LANGFUSE_ENABLED` (optional; `true` only on the backend after keys are set)
+- `LANGFUSE_BASE_URL` (optional regional or self-hosted host; blank uses the application default)
+- `LANGFUSE_TRACING_ENVIRONMENT` (optional; blank uses `APP_ENV`)
 
 Frankfurter needs no secret. Database username/password come from the **RDS-generated** secret.
 Never put values in CDK code, `cdk.json`, context, CloudFormation outputs, images, logs, or git.
 Copy `app-secret.example.json` to `app-secret.json` (gitignored) and edit locally.
 
 Provider keys needed by approved MCP tools (quotes, analysis, statement parse) are injected into the
-backend **and** MCP containers. OpenAI and demo-session signing secrets stay on the backend only.
-Streamlit receives `BACKEND_URL=http://127.0.0.1:8000` only. MCP receives no `MCP_SERVER_URL` (it is
+backend **and** MCP containers. OpenAI, demo-session signing, and Langfuse settings stay on the
+backend agent container only. The migration task does not receive Langfuse credentials. MCP and
+Streamlit set `LANGFUSE_ENABLED=false` and have no Langfuse secrets. Tracing uses the existing
+HTTPS egress rule; do not add inbound access. See the root README for local Compose setup and a
+safe trace-verification procedure. Streamlit receives `BACKEND_URL=http://127.0.0.1:8000` only. MCP receives no `MCP_SERVER_URL` (it is
 the server). The backend receives `MCP_SERVER_URL=http://127.0.0.1:8001/mcp`.
 
 ## Charges while deployed

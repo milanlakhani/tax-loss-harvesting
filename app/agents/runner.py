@@ -11,6 +11,7 @@ from app.agents.specialists import (
 )
 from app.container import AppContainer
 from app.domain.errors import MCP_UNAVAILABLE_MESSAGE, McpUnavailableError
+from app.observability import langfuse_trace
 from app.services.orchestrator_sessions import OrchestratorSessionService
 
 
@@ -31,9 +32,17 @@ async def run_orchestrator_turn(
     try:
         if container.settings.enable_llm_orchestrator and container.settings.openai_api_key:
             try:
-                reply, invoked = await _run_llm(
-                    handlers, str(user_id), message, sdk, container.settings.openai_model
-                )
+                with langfuse_trace(
+                    container.settings,
+                    user_id=user_id,
+                    session_id=active.id,
+                    message=message,
+                    model=container.settings.openai_model,
+                ) as trace:
+                    reply, invoked = await _run_llm(
+                        handlers, str(user_id), message, sdk, container.settings.openai_model
+                    )
+                    trace.set_output(reply)
                 invoked = await _ensure_eval(handlers, str(user_id), invoked)
                 return {
                     "session_id": str(active.id),

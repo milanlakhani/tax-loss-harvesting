@@ -26,6 +26,11 @@
   AWS sidecar: `http://127.0.0.1:8001/mcp`). The Eval agent cannot substitute LLM opinion for a
   rule. The Orchestrator only reports persisted candidate statuses and never raw ML output.
   MCP unavailability is fail-closed and cannot skip safety evaluation.
+- **observability** — optional Langfuse/OpenInference tracing around OpenAI Agents SDK chat turns.
+  Disabled by default, content-redacted by default, and isolated from financial and execution
+  behavior. Each LLM chat turn is a root `AGENT` observation with nested generation and tool
+  observations; correlation identifiers are hashed before export. Missing credentials or exporter
+  outages never alter routing, Eval, analysis, or paper orders.
 - **api** — FastAPI health, statements, analyses, paper-order prepare/confirm/refresh, demo sessions,
   orchestrator sessions. FastAPI does **not** serve `/mcp`. Browser and agents submit only server-issued IDs and the confirmation token.
 - **ui** — Streamlit (separate Compose container). Confirmation requires an unchecked review box and
@@ -87,7 +92,9 @@ Inbound WhatsApp is disabled on AWS: Meta cannot call a CIDR-restricted ALB, and
 be opened to `0.0.0.0/0`. The application WhatsApp path remains read-only.
 
 The public task IP is a cost-saving demo choice, not a production recommendation. Task egress is
-PostgreSQL to RDS, HTTPS to providers/AWS APIs/ECR, and DNS — not “ECS-to-RDS only”.
+PostgreSQL to RDS, HTTPS to providers/Langfuse/AWS APIs/ECR, and DNS — not “ECS-to-RDS only”.
+Langfuse credentials and the regional base URL live in the application secret and are injected
+only into the backend container; MCP, Streamlit, and the migration task do not receive them.
 
 ## Orchestrator sessions vs demo sessions
 

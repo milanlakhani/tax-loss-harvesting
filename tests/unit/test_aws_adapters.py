@@ -83,8 +83,38 @@ def test_secrets_overlay_fills_blank_env_only():
     assert env["OPENAI_API_KEY"] == "already-set"
     assert env["ALPHA_VANTAGE_API_KEY"] == "av"
     assert APP_SECRET_KEYS[0] == "OPENAI_API_KEY"
+    assert "LANGFUSE_PUBLIC_KEY" in APP_SECRET_KEYS
+    assert "LANGFUSE_SECRET_KEY" in APP_SECRET_KEYS
+    assert "LANGFUSE_BASE_URL" in APP_SECRET_KEYS
     local = LocalEnvSecrets().apply({"OPENAI_API_KEY": "local"})
     assert local["OPENAI_API_KEY"] == "local"
+
+
+@pytest.mark.unit
+def test_secrets_overlay_fills_blank_langfuse_keys():
+    overlay = SecretsManagerOverlay(
+        "arn:aws:secretsmanager:eu-west-2:123:secret:app",
+        client=FakeSecrets(
+            {
+                "LANGFUSE_ENABLED": "true",
+                "LANGFUSE_PUBLIC_KEY": "from-sm",
+                "LANGFUSE_SECRET_KEY": "from-sm-secret",
+                "LANGFUSE_BASE_URL": "https://example.invalid",
+            }
+        ),
+    )
+    env = overlay.apply(
+        {
+            "LANGFUSE_ENABLED": "",
+            "LANGFUSE_PUBLIC_KEY": "",
+            "LANGFUSE_SECRET_KEY": "already-set",
+            "LANGFUSE_BASE_URL": "",
+        }
+    )
+    assert env["LANGFUSE_ENABLED"] == "true"
+    assert env["LANGFUSE_PUBLIC_KEY"] == "from-sm"
+    assert env["LANGFUSE_SECRET_KEY"] == "already-set"
+    assert env["LANGFUSE_BASE_URL"] == "https://example.invalid"
 
 
 async def _shared_window_contract(store):

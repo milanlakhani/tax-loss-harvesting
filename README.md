@@ -5,6 +5,62 @@ orchestration, Streamlit, Alpaca paper synchronization, and guarded paper-order 
 
 For the optional read-only WhatsApp demonstration, see [the no-extra-cost setup guide](docs/whatsapp-no-cost-setup.md).
 
+## Optional Langfuse tracing
+
+Langfuse tracing for OpenAI Agents SDK turns is available in local Docker Compose and in the AWS
+deployment. It is disabled by default and does not participate in financial calculations, candidate
+evaluation, persistence, or paper execution.
+
+### Local Docker Compose
+
+Set the following in `.env` (not on the MCP or Streamlit services). Rebuild and restart **backend**
+after changing them. MCP and Streamlit Compose environment entries clear Langfuse credentials and
+the Langfuse host even if they appear in `.env`.
+
+```bash
+LANGFUSE_ENABLED=true
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_CAPTURE_CONTENT=false
+LANGFUSE_TRACING_ENVIRONMENT=local
+```
+
+Use `https://cloud.langfuse.eu` for the EU cloud region, or your self-hosted Langfuse base URL.
+Keep `LANGFUSE_CAPTURE_CONTENT=false`.
+
+### AWS
+
+Langfuse keys and the regional base URL live only in the application Secrets Manager JSON. They are
+injected into the backend (agent) container only. MCP, Streamlit, and the migration task do not
+receive them. Leave the Langfuse keys blank to keep tracing off. To enable:
+
+1. Copy `infrastructure/app-secret.example.json` to a local `app-secret.json` (gitignored).
+2. Set `LANGFUSE_ENABLED` to `true`, add the public/secret keys, and set `LANGFUSE_BASE_URL` to the
+   host for your Langfuse region (`https://cloud.langfuse.com`, `https://cloud.langfuse.eu`, or a
+   self-hosted URL). Optional `LANGFUSE_TRACING_ENVIRONMENT` defaults to `aws` from `APP_ENV`.
+3. `aws secretsmanager put-secret-value` with that JSON, then force a new ECS deployment.
+4. Do not put Langfuse values in CDK context, CloudFormation outputs, or git.
+
+Task egress already allows HTTPS (443); no extra inbound rule is required.
+
+Missing credentials, SDK errors, or exporter outages disable tracing and never block agent fallback,
+Eval, analysis, or paper orders.
+
+### Safe trace verification
+
+1. Enable tracing as above. Do not use a production portfolio.
+2. Open chat and send a benign prompt such as holdings or spending summary (LLM path).
+3. In Langfuse, open the `run-orchestrator-turn` trace for environment `local` or `aws`.
+4. Confirm the user/session identifiers are hashed, payloads are `[redacted]` unless you explicitly
+   enabled content capture, and the trace does not contain confirmation tokens, PDF bytes, account
+   numbers, tax lots, or full MCP payloads.
+5. Confirm MCP and Streamlit task definitions (AWS) or containers (Compose) have no Langfuse keys.
+
+Each LLM chat turn creates a root `AGENT` observation named `run-orchestrator-turn`. Filter by tags
+`northstar`, `chat`, and `orchestrator`. Batch analysis jobs do not call an LLM and do not create
+traces.
+
 Financial logic lives only in application services. Agents, MCP handlers, API routes, Streamlit,
 and provider adapters do not reimplement harvesting, wash-sale, risk, or evaluation rules.
 
@@ -15,6 +71,7 @@ and provider adapters do not reimplement harvesting, wash-sale, risk, or evaluat
 - Docker Compose **v5.3.1**
 - PostgreSQL **16.6** (Compose image `postgres:16.6-alpine`)
 - fastapi==0.115.8, pydantic==2.11.7, httpx==0.28.1, openai-agents==0.2.11, fastmcp==2.11.3, streamlit==1.42.2, alpaca-py==0.40.1
+- langfuse==4.15.1, openinference-instrumentation-openai-agents==2.0.0
 
 ## Startup
 
