@@ -55,6 +55,44 @@ BACKEND_PORT = 8000
 MCP_PORT = 8001
 STREAMLIT_PORT = 8501
 AWS_MCP_SERVER_URL = "http://127.0.0.1:8001/mcp"
+DEFAULT_SERVICE_DESIRED_COUNT = 0
+ALLOWED_SERVICE_DESIRED_COUNTS = frozenset({0, 1})
+AWS_CURRENT_DEMO_ENVIRONMENT = {
+    "DEMO_MODE": "current",
+    "DEMO_AS_OF_DATE": "today",
+    "DEMO_STATEMENT_MAX_AGE_DAYS": "20",
+}
+
+
+class ServiceDesiredCountError(ValueError):
+    """Raised when CDK synthesis would use a Fargate desired count other than 0 or 1."""
+
+
+def require_service_desired_count(value: object = None) -> int:
+    """Accept only integer 0 or 1. Missing values default to 0 so the first deploy stays idle."""
+    if value is None or value == "":
+        return DEFAULT_SERVICE_DESIRED_COUNT
+    if isinstance(value, bool):
+        raise ServiceDesiredCountError("service_desired_count must be the integer 0 or 1.")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if stripped in {"0", "1"}:
+            parsed = int(stripped)
+        else:
+            raise ServiceDesiredCountError(
+                f"service_desired_count must be the integer 0 or 1 (got {value!r})."
+            )
+    else:
+        raise ServiceDesiredCountError(
+            f"service_desired_count must be the integer 0 or 1 (got {value!r})."
+        )
+    if parsed not in ALLOWED_SERVICE_DESIRED_COUNTS:
+        raise ServiceDesiredCountError(
+            f"service_desired_count must be the integer 0 or 1 (got {parsed!r})."
+        )
+    return parsed
 
 
 class TaxLossHarvestingStack(Stack):
@@ -68,11 +106,13 @@ class TaxLossHarvestingStack(Stack):
         allowed_ipv4_cidr: str,
         environment_name: str = "demo",
         container_image: ecs.ContainerImage | None = None,
+        service_desired_count: object = DEFAULT_SERVICE_DESIRED_COUNT,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
         self.allowed_ipv4_cidr = require_allowed_cidr(allowed_ipv4_cidr)
         self.environment_name = environment_name.strip() or "demo"
+        self.service_desired_count = require_service_desired_count(service_desired_count)
         demo_destroy = destroy_compatible(self.environment_name)
         removal = RemovalPolicy.DESTROY if demo_destroy else RemovalPolicy.RETAIN
         log_retention = logs.RetentionDays.TWO_WEEKS
@@ -273,6 +313,7 @@ class TaxLossHarvestingStack(Stack):
             "COINGECKO_API_PLAN": "demo",
             "PYTHONUNBUFFERED": "1",
             "MCP_SERVER_URL": AWS_MCP_SERVER_URL,
+            **AWS_CURRENT_DEMO_ENVIRONMENT,
         }
         mcp_env = {
             "APP_ENV": "aws",
@@ -292,6 +333,7 @@ class TaxLossHarvestingStack(Stack):
             "COINGECKO_API_PLAN": "demo",
             "PYTHONUNBUFFERED": "1",
             "LANGFUSE_ENABLED": "false",
+            **AWS_CURRENT_DEMO_ENVIRONMENT,
         }
         backend_secrets = {
             "OPENAI_API_KEY": ecs.Secret.from_secrets_manager(app_secret, "OPENAI_API_KEY"),
@@ -455,7 +497,7 @@ class TaxLossHarvestingStack(Stack):
             "DemoService",
             cluster=cluster,
             task_definition=task,
-            desired_count=1,
+            desired_count=self.service_desired_count,
             assign_public_ip=True,
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
             security_groups=[task_sg],
@@ -544,6 +586,7 @@ class TaxLossHarvestingStack(Stack):
         CfnOutput(self, "EnvironmentName", value=self.environment_name)
         CfnOutput(self, "ClusterName", value=cluster.cluster_name)
         CfnOutput(self, "ServiceName", value=service.service_name)
+        CfnOutput(self, "ServiceDesiredCount", value=str(self.service_desired_count))
         CfnOutput(self, "StatementBucketName", value=statements.bucket_name)
         CfnOutput(self, "RollingWindowTableName", value=windows.table_name)
         CfnOutput(self, "AppSecretArn", value=app_secret.secret_arn)

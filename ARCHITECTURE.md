@@ -28,14 +28,16 @@
   MCP unavailability is fail-closed and cannot skip safety evaluation.
 - **observability** — optional Langfuse/OpenInference tracing around OpenAI Agents SDK chat turns.
   Disabled by default, content-redacted by default, and isolated from financial and execution
-  behavior. Each LLM chat turn is a root `AGENT` observation with nested generation and tool
-  observations; correlation identifiers are hashed before export. Missing credentials or exporter
-  outages never alter routing, Eval, analysis, or paper orders.
+  behavior. The OpenAI Agents SDK is instrumented once per backend process. Each LLM chat turn is a
+  root `AGENT` observation with nested generation and tool observations; correlation identifiers are
+  hashed before export. Missing credentials or exporter outages never alter routing, Eval, analysis,
+  or paper orders.
 - **api** — FastAPI health, statements, analyses, paper-order prepare/confirm/refresh, demo sessions,
   orchestrator sessions. FastAPI does **not** serve `/mcp`. Browser and agents submit only server-issued IDs and the confirmation token.
 - **ui** — Streamlit (separate Compose container). Confirmation requires an unchecked review box and
   a disabled Confirm button until guards pass.
-- **jobs** — CLI wrappers with no financial logic.
+- **jobs** — CLI wrappers with no financial logic. The opt-in Langfuse smoke check is not part of
+  pytest.
 - **demo_data** — PDF generator and seed command. Not exposed via API, MCP, or UI.
 
 ## Application entry point

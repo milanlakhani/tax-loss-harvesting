@@ -20,7 +20,8 @@ to the host unless `docker-compose.debug-mcp.yml` is explicitly enabled.
 - Encrypted S3 statement bucket with all public access blocked
 - DynamoDB on-demand table (`pk`/`sk`, TTL attribute `ttl`) for rolling windows
 - Secrets Manager application secret (JSON keys only) plus the RDS-generated secret
-- ECS cluster, one Fargate service, desired count 1
+- ECS cluster, one Fargate service; `service_desired_count` defaults to `0` and is set to `1` only after secrets, migration, seed, and the presentation check
+- Deployment circuit breaker with rollback stays enabled on that service
 - Backend (FastAPI `:8000`), FastMCP sidecar (`:8001`), and Streamlit (`:8501`) in the **same** task definition
 - Public ALB whose inbound HTTP rule is restricted to `ALLOWED_IPV4_CIDR` (never `0.0.0.0/0` by default)
 - Target groups: `/api/*`, `/health`, `/health/*` → FastAPI; default → Streamlit
@@ -96,10 +97,24 @@ HTTPS egress rule; do not add inbound access. See the root README for local Comp
 safe trace-verification procedure. Streamlit receives `BACKEND_URL=http://127.0.0.1:8000` only. MCP receives no `MCP_SERVER_URL` (it is
 the server). The backend receives `MCP_SERVER_URL=http://127.0.0.1:8001/mcp`.
 
+AWS current-demo mode is **not** a secret. Backend and MCP (and therefore the migration task, which
+inherits the backend environment) receive these ECS environment values:
+
+- `DEMO_MODE=current`
+- `DEMO_AS_OF_DATE=today`
+- `DEMO_STATEMENT_MAX_AGE_DAYS=20`
+
+Do not put those keys in Secrets Manager, `cdk.json` secret material, or `app-secret.json`.
+
+Paper-order flags stay hardcoded in the stack: backend `ENABLE_PAPER_ORDERS=true` and
+`ALPACA_PAPER=true`; MCP `ENABLE_PAPER_ORDERS=false` because MCP must not execute orders. There is
+no post-demonstration paper-order disable step.
+
 ## Charges while deployed
 
-RDS `db.t3.micro`, the ALB, one Fargate task (1 vCPU / 2 GB), Secrets Manager, CloudWatch Logs,
-S3 storage, and DynamoDB on-demand all incur charges until you destroy the stack. There is **no**
+RDS `db.t3.micro`, the ALB, Secrets Manager, CloudWatch Logs,
+S3 storage, and DynamoDB on-demand all incur charges until you destroy the stack. After the second
+deploy (`service_desired_count=1`) there is also one Fargate task (1 vCPU / 2 GB). There is **no**
 NAT Gateway charge. Public IPv4 addresses attached to the ALB and the task also incur AWS public
 IPv4 charges.
 
@@ -150,7 +165,8 @@ export CDK_DEFAULT_ACCOUNT=123456789012
 export CDK_DEFAULT_REGION=eu-west-2
 ```
 
-Equivalent CDK context: `-c allowed_ipv4_cidr=203.0.113.10/32 -c environment=demo`.
+Equivalent CDK context: `-c allowed_ipv4_cidr=203.0.113.10/32 -c environment=demo -c service_desired_count=0`.
+Only integer `0` or `1` is accepted for `service_desired_count`; the default is `0`.
 
 ### 3. Bootstrap (once per account/region)
 
@@ -166,7 +182,7 @@ cdk bootstrap aws://123456789012/eu-west-2
 Template-only synth (no image build) is:
 
 ```bash
-cdk synth -c allowed_ipv4_cidr=203.0.113.10/32 -c environment=demo -c container_image=public.ecr.aws/docker/library/python:3.12-slim
+cdk synth -c allowed_ipv4_cidr=203.0.113.10/32 -c environment=demo -c container_image=public.ecr.aws/docker/library/python:3.12-slim -c service_desired_count=0
 ```
 
 Without the `cdk` CLI, the same template-only synth is:
@@ -181,20 +197,40 @@ python app.py
 The CIDR appears in `cdk.out` outputs and the ALB security-group ingress rule; it is not a secret.
 
 ```bash
-cdk synth -c allowed_ipv4_cidr=203.0.113.10/32 -c environment=demo
-cdk diff -c allowed_ipv4_cidr=203.0.113.10/32 -c environment=demo
+cdk synth -c allowed_ipv4_cidr=203.0.113.10/32 -c environment=demo -c service_desired_count=0
+cdk diff -c allowed_ipv4_cidr=203.0.113.10/32 -c environment=demo -c service_desired_count=0
 ```
 
-### 5. Deploy
+### 5. Two-stage demonstration deploy
 
-Requires AWS credentials and Docker (image asset push to ECR).
+Requires AWS credentials and Docker (image asset push to ECR). Keep the Fargate task at desired
+count `0` until secrets, migration, seed, and the presentation check have completed. The circuit
+breaker with rollback stays enabled on both deploys.
+
+**Stage 1 — provision with `service_desired_count=0` (safe default)**
 
 ```bash
-cdk deploy TaxLossHarvestingDemo -c allowed_ipv4_cidr=203.0.113.10/32 -c environment=demo
+cdk deploy TaxLossHarvestingDemo -c allowed_ipv4_cidr=203.0.113.10/32 -c environment=demo -c service_desired_count=0
 ```
 
+Omitting `-c service_desired_count` also synthesizes `0`. Values other than `0` or `1` fail synth.
+
 Note the outputs: `LoadBalancerDns`, `AppSecretArn`, `RdsSecretArn`, `ClusterName`, `ServiceName`,
-`MigrationTaskDefinitionArn`, `TaskSecurityGroupId`, `PublicSubnetIds`.
+`ServiceDesiredCount`, `MigrationTaskDefinitionArn`, `TaskSecurityGroupId`, `PublicSubnetIds`.
+
+Continue with secret population, migration, current-demo seed, and the presentation check below.
+Then run stage 2.
+
+**Stage 2 — start the task with `service_desired_count=1`**
+
+After those one-off tasks succeed:
+
+```bash
+cdk deploy TaxLossHarvestingDemo -c allowed_ipv4_cidr=203.0.113.10/32 -c environment=demo -c service_desired_count=1
+```
+
+This is the only change that starts the demonstration service. Do not add a later paper-order
+disable deploy; backend paper flags stay `ENABLE_PAPER_ORDERS=true` and `ALPACA_PAPER=true`.
 
 ### 6. Put application secret values
 
@@ -226,8 +262,10 @@ aws ecs describe-tasks --cluster CLUSTER_NAME --tasks TASK_ARN --query "tasks[0]
 Requires AWS credentials. Use the same migration task definition, secrets, public subnets, public
 IP, and task security group. Override the container command so the task seeds rather than migrates.
 
-Set `DEMO_MODE=current` in the application secret before or after this task. The seed persists the
-as-of date; analysis then evaluates current-demo statements against that same date.
+The seed persists the as-of date. Analysis then evaluates current-demo statements against that same
+date because `DEMO_MODE=current` and `DEMO_AS_OF_DATE=today` are already ECS environment values on
+the migration task (inherited from the backend environment). Do not add these keys to the
+application secret.
 
 ```bash
 aws ecs run-task --cluster CLUSTER_NAME --task-definition MIGRATION_TASK_DEFINITION_ARN --launch-type FARGATE --network-configuration "awsvpcConfiguration={subnets=[PUBLIC_SUBNET_ID],securityGroups=[TASK_SECURITY_GROUP_ID],assignPublicIp=ENABLED}" --overrides "{\"containerOverrides\":[{\"name\":\"migrate\",\"command\":[\"python\",\"-m\",\"app.jobs.seed\",\"--mode\",\"current\",\"--as-of\",\"today\"]}]}"
@@ -247,12 +285,13 @@ historical 2024 fixtures.
 aws ecs run-task --cluster CLUSTER_NAME --task-definition MIGRATION_TASK_DEFINITION_ARN --launch-type FARGATE --network-configuration "awsvpcConfiguration={subnets=[PUBLIC_SUBNET_ID],securityGroups=[TASK_SECURITY_GROUP_ID],assignPublicIp=ENABLED}" --overrides "{\"containerOverrides\":[{\"name\":\"migrate\",\"command\":[\"python\",\"-m\",\"app.jobs.presentation_check\"]}]}"
 ```
 
-Read the task logs for the JSON report (`ok`, `as_of`, `issues`). Then force a new service
-deployment if the secret or image changed so the running API uses `DEMO_MODE=current`.
+Read the task logs for the JSON report (`ok`, `as_of`, `issues`). Then run the stage 2 deploy with
+`service_desired_count=1` so the API and Streamlit start against the seeded current-demo database.
 
 ### 8. Restart the service after secrets or image changes
 
-Requires AWS credentials.
+Requires AWS credentials. Use this only after stage 2 (`service_desired_count=1`) when the service
+is already running. The first start is the stage 2 `cdk deploy`, not this command.
 
 ```bash
 aws ecs update-service --cluster CLUSTER_NAME --service SERVICE_NAME --force-new-deployment
@@ -289,7 +328,7 @@ Requires AWS credentials. Warns via the `DestroyWarning` output that RDS, S3 obj
 items are deleted for `environment=demo`.
 
 ```bash
-cdk destroy TaxLossHarvestingDemo -c allowed_ipv4_cidr=203.0.113.10/32 -c environment=demo
+cdk destroy TaxLossHarvestingDemo -c allowed_ipv4_cidr=203.0.113.10/32 -c environment=demo -c service_desired_count=0
 ```
 
 ## Local verification that does not need AWS credentials

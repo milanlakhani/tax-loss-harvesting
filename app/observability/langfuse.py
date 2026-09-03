@@ -11,9 +11,11 @@ from app.config import Settings
 
 logger = logging.getLogger(__name__)
 
+ORCHESTRATOR_TRACE_NAME = "run-orchestrator-turn"
 _configuration_lock = Lock()
 _configured = False
 _available = False
+_instrument_calls = 0
 
 
 class LangfuseTrace:
@@ -41,9 +43,33 @@ def _anonymous_id(value: object) -> str:
     return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:24]
 
 
+def _string_metadata(values: dict[str, Any]) -> dict[str, str]:
+    """Langfuse v4 propagate_attributes metadata must be string-to-string."""
+    encoded: dict[str, str] = {}
+    for key, value in values.items():
+        if value is True:
+            encoded[key] = "true"
+        elif value is False:
+            encoded[key] = "false"
+        else:
+            encoded[key] = str(value)
+    return encoded
+
+
+def _trace_input(message: str, *, capture_content: bool) -> dict[str, str]:
+    if capture_content:
+        return {"user_message": message}
+    return {"user_message": "[redacted]", "content_capture": "disabled"}
+
+
+def configure_langfuse(settings: Settings) -> bool:
+    """Instrument the OpenAI Agents SDK once per process. Failures never block the caller."""
+    return _configure(settings)
+
+
 def _configure(settings: Settings) -> bool:
     """Configure OpenInference once; return False without affecting the caller on any failure."""
-    global _configured, _available
+    global _configured, _available, _instrument_calls
     if not settings.langfuse_enabled:
         return False
     if _configured:
@@ -84,10 +110,14 @@ def _configure(settings: Settings) -> bool:
             os.environ["LANGFUSE_BASE_URL"] = host
             os.environ["LANGFUSE_TRACING_ENVIRONMENT"] = environment
             get_client()
-            tracer_provider = otel_trace.get_tracer_provider()
-            if hasattr(tracer_provider, "add_span_processor"):
-                tracer_provider.add_span_processor(_ConfiguredModelProcessor())
-            OpenAIAgentsInstrumentor().instrument(config=privacy)
+            instrumentor = OpenAIAgentsInstrumentor()
+            already_instrumented = bool(getattr(instrumentor, "_is_instrumented_by_opentelemetry", False))
+            if not already_instrumented and _instrument_calls == 0:
+                tracer_provider = otel_trace.get_tracer_provider()
+                if hasattr(tracer_provider, "add_span_processor"):
+                    tracer_provider.add_span_processor(_ConfiguredModelProcessor())
+                instrumentor.instrument(config=privacy)
+                _instrument_calls += 1
             _available = True
             return True
         except Exception:
@@ -116,28 +146,26 @@ def langfuse_trace(
         from langfuse import get_client, propagate_attributes
 
         langfuse = get_client()
-        trace_input = {"user_message": message} if settings.langfuse_capture_content else {
-            "user_message": "[redacted]",
-            "content_capture": "disabled",
-        }
         observation_context = langfuse.start_as_current_observation(
             as_type="agent",
-            name="run-orchestrator-turn",
-            input=trace_input,
+            name=ORCHESTRATOR_TRACE_NAME,
+            input=_trace_input(message, capture_content=settings.langfuse_capture_content),
         )
         attributes_context = propagate_attributes(
-            trace_name="run-orchestrator-turn",
+            trace_name=ORCHESTRATOR_TRACE_NAME,
             user_id=_anonymous_id(user_id),
             session_id=_anonymous_id(session_id),
             tags=["northstar", "chat", "orchestrator"],
-            metadata={
-                "feature": "wealth-copilot-chat",
-                "channel": "streamlit-api",
-                "app_environment": settings.app_env,
-                "model": model,
-                "content_capture": settings.langfuse_capture_content,
-                "langfuse_host_configured": bool((settings.langfuse_base_url or "").strip()),
-            },
+            metadata=_string_metadata(
+                {
+                    "feature": "wealth-copilot-chat",
+                    "channel": "streamlit-api",
+                    "app_environment": settings.app_env,
+                    "model": model,
+                    "content_capture": "enabled" if settings.langfuse_capture_content else "disabled",
+                    "langfuse_host_configured": bool((settings.langfuse_base_url or "").strip()),
+                }
+            ),
         )
     except Exception:
         logger.exception("Optional Langfuse trace context could not be created")

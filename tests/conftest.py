@@ -37,6 +37,7 @@ LIVE_HOST_FRAGMENTS = (
     "alpaca.markets",
     "openai.com",
     "api.openai",
+    "langfuse.com",
 )
 
 

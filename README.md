@@ -26,8 +26,10 @@ LANGFUSE_CAPTURE_CONTENT=false
 LANGFUSE_TRACING_ENVIRONMENT=local
 ```
 
-Use `https://cloud.langfuse.eu` for the EU cloud region, or your self-hosted Langfuse base URL.
-Keep `LANGFUSE_CAPTURE_CONTENT=false`.
+Use the Langfuse regional base URL this project's keys were issued for. The application default is
+`https://cloud.langfuse.com` (EU). Official cloud regions also include `https://us.cloud.langfuse.com`,
+`https://jp.cloud.langfuse.com`, and `https://hipaa.cloud.langfuse.com`. Keep
+`LANGFUSE_CAPTURE_CONTENT=false` unless you explicitly enable it for an all-synthetic demonstration.
 
 ### AWS
 
@@ -37,8 +39,9 @@ receive them. Leave the Langfuse keys blank to keep tracing off. To enable:
 
 1. Copy `infrastructure/app-secret.example.json` to a local `app-secret.json` (gitignored).
 2. Set `LANGFUSE_ENABLED` to `true`, add the public/secret keys, and set `LANGFUSE_BASE_URL` to the
-   host for your Langfuse region (`https://cloud.langfuse.com`, `https://cloud.langfuse.eu`, or a
-   self-hosted URL). Optional `LANGFUSE_TRACING_ENVIRONMENT` defaults to `aws` from `APP_ENV`.
+   host for this project's Langfuse region (`https://cloud.langfuse.com` by default, or another
+   official/self-hosted URL the keys were issued for). Optional `LANGFUSE_TRACING_ENVIRONMENT`
+   defaults to `aws` from `APP_ENV`.
 3. `aws secretsmanager put-secret-value` with that JSON, then force a new ECS deployment.
 4. Do not put Langfuse values in CDK context, CloudFormation outputs, or git.
 
@@ -60,6 +63,18 @@ Eval, analysis, or paper orders.
 Each LLM chat turn creates a root `AGENT` observation named `run-orchestrator-turn`. Filter by tags
 `northstar`, `chat`, and `orchestrator`. Batch analysis jobs do not call an LLM and do not create
 traces.
+
+### Opt-in Langfuse smoke check (not part of pytest)
+
+This credential-dependent network check is not in the default test suite. It never prints keys.
+
+```bash
+python -m app.jobs.langfuse_smoke
+```
+
+The job authenticates with `auth_check`, runs one synthetic agent turn with no financial tools,
+flushes pending telemetry, and confirms a `run-orchestrator-turn` trace is visible in the configured
+project. Requires `LANGFUSE_ENABLED=true`, Langfuse keys, and `OPENAI_API_KEY`.
 
 Financial logic lives only in application services. Agents, MCP handlers, API routes, Streamlit,
 and provider adapters do not reimplement harvesting, wash-sale, risk, or evaluation rules.
