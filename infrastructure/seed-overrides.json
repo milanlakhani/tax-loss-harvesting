@@ -1,0 +1,1 @@
+{"containerOverrides":[{"name":"migrate","command":["python","-m","app.jobs.seed","--mode","current","--as-of","today"]}]}
