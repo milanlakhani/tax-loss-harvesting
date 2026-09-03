@@ -132,7 +132,7 @@ streamlit run app/ui/streamlit_app.py --server.port 8501
 4. Open http://localhost:8501. Streamlit creates an unguessable **server-bound demo session** in
    Streamlit session state. This is **not authentication**. AWS deployments additionally restrict
    ALB access to an operator-supplied IP CIDR.
-5. Upload bank and brokerage statement PDFs (a folder or multiple files), ask statement questions, review anomalies, drift, and **approved vs
+5. Upload bank and brokerage statement PDFs (multiple PDF files), ask statement questions, review anomalies, drift, and **approved vs
    rejected** candidates in separate sections.
 6. Prepare an approved candidate. Read the server-generated snapshot (account, SELL, asset, type,
    quantity, provider reference price/timestamp, proceeds, basis, estimated loss, rule results,

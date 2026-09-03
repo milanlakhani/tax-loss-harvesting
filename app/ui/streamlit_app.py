@@ -628,26 +628,29 @@ def main() -> None:
         st.caption("Authoritative values are reloaded from PostgreSQL; conversation memory is never a financial source of truth.")
     elif page == "Statement upload":
         st.header("Bank and brokerage statement upload")
-        st.caption("Upload a folder of PDFs, or select multiple files. Bank and brokerage statements are detected automatically from the document.")
+        st.caption(
+            "Upload multiple PDF files. Bank and brokerage statements can be selected together; "
+            "the parser is detected automatically from each document. In the file-selection window, "
+            "use Ctrl/Shift or Ctrl+A to select multiple PDFs."
+        )
         with st.form("statement_upload_form", clear_on_submit=True):
             uploaded = st.file_uploader(
                 "Statement PDFs",
                 type=["pdf"],
                 accept_multiple_files=True,
-                help="Select every PDF in a folder. Bank and brokerage statements can be mixed.",
-            )
-            folder = st.text_input(
-                "Or ingest every PDF in a local folder",
-                placeholder=r"C:\statements\demo  or  /app/local-data",
+                help=(
+                    "Use Ctrl/Shift or Ctrl+A in the file-selection window to select multiple PDFs. "
+                    "Bank and brokerage statements can be mixed."
+                ),
             )
             submitted = st.form_submit_button("Ingest statements")
 
         if submitted:
-            items, warnings = collect_statement_pdfs(uploads=uploaded, folder=folder)
+            items, warnings = collect_statement_pdfs(uploads=uploaded)
             for warning in warnings:
                 st.warning(warning)
             if not items:
-                st.warning("Choose one or more PDFs, or a folder that contains PDF statements.")
+                st.warning("Choose one or more PDF files.")
             else:
                 results = [_ingest_statement_pdf(name, data) for name, data in items]
                 ingested = sum(1 for row in results if row.get("status") == "ingested")

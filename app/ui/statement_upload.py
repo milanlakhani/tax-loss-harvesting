@@ -7,7 +7,10 @@ PDF_SUFFIXES = {".pdf"}
 
 
 def collect_statement_pdfs(*, uploads=None, folder: str = "") -> tuple[list[tuple[str, bytes]], list[str]]:
-    """Gather bank and brokerage PDFs from an uploader and/or a local folder."""
+    """Gather bank and brokerage PDFs from selected uploads.
+
+    ``folder`` remains for internal CLI/tests. The web UI must not expose a host path.
+    """
     items: list[tuple[str, bytes]] = []
     warnings: list[str] = []
     seen: set[str] = set()
