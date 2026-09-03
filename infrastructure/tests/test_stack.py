@@ -221,6 +221,8 @@ def test_rds_is_isolated_encrypted_single_az():
     template.has_resource_properties(
         "AWS::RDS::DBInstance",
         {
+            "Engine": "postgres",
+            "EngineVersion": "16.15",
             "PubliclyAccessible": False,
             "StorageEncrypted": True,
             "MultiAZ": False,

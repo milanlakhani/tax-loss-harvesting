@@ -16,7 +16,7 @@ to the host unless `docker-compose.debug-mcp.yml` is explicitly enabled.
 - VPC across two AZs: public subnets (ALB + one Fargate task) and isolated private subnets (RDS)
 - No NAT Gateway
 - Free gateway VPC endpoints for S3 and DynamoDB
-- Single-AZ RDS PostgreSQL `db.t3.micro`, encrypted, not publicly accessible
+- Single-AZ RDS PostgreSQL **16.15** `db.t3.micro`, encrypted, not publicly accessible
 - Encrypted S3 statement bucket with all public access blocked
 - DynamoDB on-demand table (`pk`/`sk`, TTL attribute `ttl`) for rolling windows
 - Secrets Manager application secret (JSON keys only) plus the RDS-generated secret

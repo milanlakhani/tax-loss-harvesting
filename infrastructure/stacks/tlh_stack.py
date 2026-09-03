@@ -224,7 +224,7 @@ class TaxLossHarvestingStack(Stack):
             self,
             "Postgres",
             engine=rds.DatabaseInstanceEngine.postgres(
-                version=rds.PostgresEngineVersion.of("16.6", "16"),
+                version=rds.PostgresEngineVersion.of("16.15", "16"),
             ),
             instance_type=ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MICRO),
             vpc=vpc,
