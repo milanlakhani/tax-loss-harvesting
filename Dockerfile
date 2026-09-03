@@ -14,6 +14,7 @@ COPY pytest.ini .
 COPY alembic ./alembic
 COPY app ./app
 COPY tests ./tests
+COPY .streamlit ./.streamlit
 
 ENV PYTHONUNBUFFERED=1
 ENV APP_ENV=local
