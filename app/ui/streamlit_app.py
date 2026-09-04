@@ -10,6 +10,13 @@ import httpx
 import streamlit as st
 
 from app.ui.confirm_state import confirm_button_enabled, paper_submit_feedback
+from app.ui.display_format import (
+    format_calendar_date,
+    format_currency_amount,
+    format_ordinary_currency,
+    format_price,
+    format_quantity,
+)
 from app.ui.statement_upload import collect_statement_pdfs
 
 BACKEND = os.environ.get("BACKEND_URL", "http://localhost:8000")
@@ -726,7 +733,17 @@ def main() -> None:
         st.subheader("Holdings")
         if holdings:
             st.dataframe(
-                [{"Symbol":h.get("symbol"),"Name":h.get("name"),"Type":_friendly_code(h.get("asset_type")),"Quantity":h.get("quantity"),"Account":h.get("account"),"As of":h.get("as_of","")[:10]} for h in holdings],
+                [
+                    {
+                        "Symbol": h.get("symbol"),
+                        "Name": h.get("name"),
+                        "Type": _friendly_code(h.get("asset_type")),
+                        "Quantity": format_quantity(h.get("quantity")),
+                        "Account": h.get("account"),
+                        "As of": format_calendar_date(h.get("as_of")),
+                    }
+                    for h in holdings
+                ],
                 use_container_width=True,
                 hide_index=True,
             )
@@ -837,7 +854,16 @@ def main() -> None:
         ])
         if anomalies:
             st.dataframe(
-                [{"Date":a.get("date"),"Merchant":a.get("merchant"),"Amount":f"{a.get('currency','')} {a.get('amount','')}","Anomaly score":round(float(a.get("normalized_score",0)),3),"Status":"Review"} for a in anomalies],
+                [
+                    {
+                        "Date": format_calendar_date(a.get("date")),
+                        "Merchant": a.get("merchant"),
+                        "Amount": format_currency_amount(a.get("amount"), a.get("currency")),
+                        "Anomaly score": round(float(a.get("normalized_score", 0)), 3),
+                        "Status": "Review",
+                    }
+                    for a in anomalies
+                ],
                 use_container_width=True,
                 hide_index=True,
             )
@@ -984,7 +1010,25 @@ def main() -> None:
         ])
         st.subheader("Approved opportunities")
         if approved:
-            st.dataframe([{"Rank":x.get("rank"),"Symbol":x.get("symbol"),"Type":x.get("asset_type"),"Quantity":x.get("selected_quantity"),"Estimated loss":x.get("estimated_loss"),"Reference price":x.get("reference_price"),"Provider":x.get("quote_provider"),"Feed":x.get("quote_feed"),"Decision":"Approved","Candidate ID":x.get("candidate_id")} for x in approved], use_container_width=True, hide_index=True)
+            st.dataframe(
+                [
+                    {
+                        "Rank": x.get("rank"),
+                        "Symbol": x.get("symbol"),
+                        "Type": x.get("asset_type"),
+                        "Quantity": format_quantity(x.get("selected_quantity")),
+                        "Estimated loss": format_ordinary_currency(x.get("estimated_loss")),
+                        "Reference price": format_price(x.get("reference_price"), x.get("asset_type")),
+                        "Provider": x.get("quote_provider"),
+                        "Feed": x.get("quote_feed"),
+                        "Decision": "Approved",
+                        "Candidate ID": x.get("candidate_id"),
+                    }
+                    for x in approved
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
         elif run_id:
             st.info("No candidate currently passes every safety rule. This is a valid fail-closed outcome.")
         _render_protected_decisions(rejected)
@@ -1015,7 +1059,24 @@ def main() -> None:
                 st.success("Passed every configured hard gate and is eligible for paper-order preparation.")
             else:
                 st.warning(selected.get("explanation") or "Candidate blocked by policy.")
-            st.dataframe([{"Field":"Account","Value":selected.get("account")},{"Field":"Asset type","Value":selected.get("asset_type")},{"Field":"Quantity","Value":selected.get("selected_quantity")},{"Field":"Reference price","Value":selected.get("reference_price")},{"Field":"Quote provider","Value":selected.get("quote_provider")},{"Field":"Quote feed","Value":selected.get("quote_feed")},{"Field":"Replacement","Value":selected.get("replacement")},{"Field":"Rule version","Value":selected.get("rule_version")},{"Field":"Candidate ID","Value":selected.get("candidate_id")}], use_container_width=True, hide_index=True)
+            st.dataframe(
+                [
+                    {"Field": "Account", "Value": selected.get("account")},
+                    {"Field": "Asset type", "Value": selected.get("asset_type")},
+                    {"Field": "Quantity", "Value": format_quantity(selected.get("selected_quantity"))},
+                    {
+                        "Field": "Reference price",
+                        "Value": format_price(selected.get("reference_price"), selected.get("asset_type")),
+                    },
+                    {"Field": "Quote provider", "Value": selected.get("quote_provider")},
+                    {"Field": "Quote feed", "Value": selected.get("quote_feed")},
+                    {"Field": "Replacement", "Value": selected.get("replacement")},
+                    {"Field": "Rule version", "Value": selected.get("rule_version")},
+                    {"Field": "Candidate ID", "Value": selected.get("candidate_id")},
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
     elif page == "Paper orders":
         st.header("Paper order review")
         st.caption("Select an approved opportunity, review a read-only snapshot, then use the separate confirmation control.")
